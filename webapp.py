@@ -27,6 +27,7 @@ from agents.policy_agent import enforce_policy_hitl
 from orchestrators.root_coordinator import create_root_coordinator
 
 from config.groq_config import get_groq_client
+from blockchain_client import get_blockchain_client
 
 try:
     from groq import Groq
@@ -214,11 +215,25 @@ def build_fallback_report(req: AuditRequest, risk_data: dict[str, Any], policy_d
 def run_audit(req: AuditRequest) -> dict[str, Any]:
     log_queue.put({"type": "info", "message": f"Starting audit for {req.supplier_name}..."})
     
-    log_queue.put({"type": "info", "message": "[1/4] Calculating ESG risk scores..."})
+    log_queue.put({"type": "info", "message": "[1/5] Calculating ESG risk scores..."})
     risk_data = calculate_carbon_score(emissions=req.emissions, violations=req.violations)
     log_queue.put({"type": "success", "message": f"✓ Risk Score: {risk_data['risk_score']} ({risk_data['classification']})"})
     
-    log_queue.put({"type": "info", "message": "[2/4] Enforcing policy rules..."})
+    # Blockchain: Anchor score
+    bc = get_blockchain_client()
+    score_anchor = bc.anchor_score(
+        supplier_name=req.supplier_name,
+        risk_score=risk_data["risk_score"],
+        classification=risk_data["classification"],
+        emissions=req.emissions,
+        violations=req.violations,
+        emissions_score=risk_data["emissions_score"],
+        violations_score=risk_data["violations_score"],
+        external_risk_score=risk_data.get("external_risk_score", 0.0)
+    )
+    log_queue.put({"type": "success", "message": f"✓ Score anchored on blockchain: {score_anchor.get('tx_id', 'LOCAL')[:20]}..."})
+    
+    log_queue.put({"type": "info", "message": "[2/5] Enforcing policy rules..."})
     policy_data = enforce_policy_hitl(risk_score=risk_data["risk_score"], supplier_name=req.supplier_name)
     log_queue.put({"type": "success", "message": f"✓ Policy Decision: {policy_data['decision']}"})
 
@@ -229,7 +244,7 @@ def run_audit(req: AuditRequest) -> dict[str, Any]:
     client = get_client()
     if client is not None:
         try:
-            log_queue.put({"type": "info", "message": "[3/4] Generating AI report with multi-agent pipeline..."})
+            log_queue.put({"type": "info", "message": "[3/5] Generating AI report with multi-agent pipeline..."})
             coordinator = create_root_coordinator(client)
             response = coordinator.generate_content(make_audit_prompt(req))
             report_text = response.text
@@ -246,7 +261,17 @@ def run_audit(req: AuditRequest) -> dict[str, Any]:
     else:
         log_queue.put({"type": "warning", "message": "⚠ AI client unavailable, using deterministic report"})
 
-    log_queue.put({"type": "info", "message": "[4/4] Finalizing audit results..."})
+    # Blockchain: Register report hash
+    log_queue.put({"type": "info", "message": "[4/5] Recording report hash on blockchain..."})
+    report_hash_record = bc.register_report_hash(
+        supplier_name=req.supplier_name,
+        score_anchor_tx=score_anchor.get("tx_id"),
+        hitl_decision_tx=None,
+        report_text=report_text
+    )
+    log_queue.put({"type": "success", "message": f"✓ Report hash: {report_hash_record['verification_code']}"})
+
+    log_queue.put({"type": "info", "message": "[5/5] Finalizing audit results..."})
     result = {
         "job_id": f"JOB-{uuid4().hex[:8].upper()}",
         "audit_id": f"AUD-{uuid4().hex[:10].upper()}",
@@ -268,6 +293,14 @@ def run_audit(req: AuditRequest) -> dict[str, Any]:
         "report_source": report_source,
         "download_links": {},
         "status": "pending_approval" if policy_data["human_approval_required"] else "completed",
+        "blockchain": {
+            "score_tx": score_anchor.get("tx_id") or score_anchor.get("local_id"),
+            "score_hash": score_anchor.get("data_hash"),
+            "report_tx": report_hash_record.get("tx_id") or report_hash_record.get("local_id"),
+            "report_hash": report_hash_record.get("report_hash"),
+            "verification_code": report_hash_record.get("verification_code"),
+            "on_chain": score_anchor.get("on_chain", False)
+        }
     }
     
     # HITL Workflow Pause: If human approval required, save to pending queue
@@ -278,6 +311,7 @@ def run_audit(req: AuditRequest) -> dict[str, Any]:
         result["approver_name"] = None
         result["approval_notes"] = None
         result["approval_timestamp"] = None
+        result["blockchain"]["hitl_tx"] = None
     else:
         log_queue.put({"type": "success", "message": f"✓ Audit complete for {req.supplier_name}"})
     
@@ -434,6 +468,10 @@ def export_audit_files(result: dict[str, Any]) -> dict[str, str]:
 
     pdf_path = job_dir / f"{safe_stem}.pdf"
     docx_path = job_dir / f"{safe_stem}.docx"
+    txt_path = job_dir / f"{safe_stem}.txt"
+
+    # Save raw report text for verification
+    txt_path.write_text(result["report_text"], encoding="utf-8")
 
     _write_pdf(pdf_path, result)
     _write_docx(docx_path, result)
@@ -473,6 +511,7 @@ def export_audit_files(result: dict[str, Any]) -> dict[str, str]:
     return {
         "pdf": f"/api/audits/{result['audit_id']}/pdf/download",
         "docx": f"/outputs/{result['job_id'].lower()}/{docx_path.name}",
+        "txt": f"/outputs/{result['job_id'].lower()}/{txt_path.name}",
     }
 
 
@@ -536,12 +575,27 @@ def approve_audit(audit_id: str, approval: ApprovalRequest) -> dict[str, Any]:
     if audit is None:
         raise HTTPException(status_code=404, detail="Pending audit not found")
     
+    # Blockchain: Record HITL decision
+    bc = get_blockchain_client()
+    hitl_record = bc.record_hitl_decision(
+        supplier_name=audit["supplier_name"],
+        score_anchor_tx=audit.get("blockchain", {}).get("score_tx"),
+        approved=True,
+        risk_score=audit["risk_score"],
+        decision=audit["policy_decision"],
+        reason=audit["policy_reason"],
+        recommended_action=audit["recommended_action"]
+    )
+    
     # Update audit with approval info
     audit["status"] = "completed"
     audit["approval_status"] = "approved"
     audit["approver_name"] = approval.approver_name
     audit["approval_notes"] = approval.approval_notes
     audit["approval_timestamp"] = datetime.now(timezone.utc).isoformat()
+    if "blockchain" not in audit:
+        audit["blockchain"] = {}
+    audit["blockchain"]["hitl_tx"] = hitl_record.get("tx_id") or hitl_record.get("local_id")
     
     # Remove from pending and add to history
     pending = [x for x in pending if x.get("audit_id") != audit_id]
@@ -569,12 +623,27 @@ def reject_audit(audit_id: str, approval: ApprovalRequest) -> dict[str, Any]:
     if audit is None:
         raise HTTPException(status_code=404, detail="Pending audit not found")
     
+    # Blockchain: Record HITL decision
+    bc = get_blockchain_client()
+    hitl_record = bc.record_hitl_decision(
+        supplier_name=audit["supplier_name"],
+        score_anchor_tx=audit.get("blockchain", {}).get("score_tx"),
+        approved=False,
+        risk_score=audit["risk_score"],
+        decision=audit["policy_decision"],
+        reason=audit["policy_reason"],
+        recommended_action=audit["recommended_action"]
+    )
+    
     # Update audit with rejection info
     audit["status"] = "rejected"
     audit["approval_status"] = "rejected"
     audit["approver_name"] = approval.approver_name
     audit["approval_notes"] = approval.approval_notes
     audit["approval_timestamp"] = datetime.now(timezone.utc).isoformat()
+    if "blockchain" not in audit:
+        audit["blockchain"] = {}
+    audit["blockchain"]["hitl_tx"] = hitl_record.get("tx_id") or hitl_record.get("local_id")
     
     # Remove from pending and add to history (with rejected status)
     pending = [x for x in pending if x.get("audit_id") != audit_id]
@@ -671,6 +740,25 @@ def download_pdf(audit_id: str) -> FileResponse:
         filename=pdf_name,
         headers={"Content-Disposition": f"attachment; filename={pdf_name}"},
     )
+
+
+@app.get("/api/blockchain/status")
+def blockchain_status() -> dict[str, Any]:
+    """Get blockchain connection status and statistics"""
+    bc = get_blockchain_client()
+    balance_info = bc.get_balance()
+    history = bc.get_audit_history()
+    
+    return {
+        "connected": bc.connected,
+        "address": bc.address[:16] + "..." if bc.connected else "N/A",
+        "balance": balance_info.get("balance_algo", 0),
+        "network": "Algorand Testnet" if bc.connected else "Offline",
+        "score_anchors": len(history["score_anchors"]),
+        "hitl_decisions": len(history["hitl_decisions"]),
+        "report_hashes": len(history["report_hashes"]),
+        "on_chain_count": sum(1 for r in history["score_anchors"] if r["on_chain"])
+    }
 
 
 @app.websocket("/ws/logs")

@@ -1,5 +1,6 @@
 """
 Root Coordinator - Sequential orchestration using custom framework with Groq
+Includes Algorand blockchain integration for immutable audit recording.
 """
 
 import re
@@ -13,6 +14,7 @@ from agents.monitor_agent import create_monitor_agent
 from agents.calculation_agent import create_calculation_agent, calculate_carbon_score
 from agents.policy_agent import create_policy_agent, enforce_policy_hitl
 from agents.reporting_agent import create_reporting_agent
+from blockchain_client import get_blockchain_client
 
 
 @dataclass
@@ -59,89 +61,181 @@ class RootCoordinator:
 
     def generate_content(self, audit_input: str):
         """
-        Orchestrates the complete multi-agent audit pipeline.
+        Orchestrates the complete multi-agent audit pipeline with
+        three blockchain integration points:
+
+        Agent Pipeline:
+          MonitorAgent -> CalculationAgent -> [BLOCKCHAIN: Score Anchor]
+                       -> PolicyAgent      -> [BLOCKCHAIN: HITL Decision]
+                       -> ReportingAgent   -> [BLOCKCHAIN: Report Hash]
         """
         # Parse input
         supplier_name, emissions, violations = self._parse_audit_input(audit_input)
-        
+
         print(f"\n{'='*60}")
-        print(f"MULTI-AGENT PIPELINE EXECUTION")
+        print(f"MULTI-AGENT PIPELINE WITH BLOCKCHAIN INTEGRATION")
         print(f"{'='*60}\n")
-        
+
+        blockchain = get_blockchain_client()
+
+        # Track blockchain TX IDs for chain of custody
+        score_anchor_tx = None
+        hitl_decision_tx = None
+        report_hash_tx = None
+
         try:
-            # Create agents
-            print("[1/5] Creating agents...")
+            # ---------------------------------------------------------- #
+            #  STEP 1: Create agents
+            # ---------------------------------------------------------- #
+            print("[1/7] Creating agents...")
             monitor_agent = create_monitor_agent(self.client)
             calculation_agent = create_calculation_agent()
             policy_agent = create_policy_agent(self.client)
             reporting_agent = create_reporting_agent(self.client)
-            print("✓ All 4 agents created successfully\n")
-            
-            # Create orchestrator
-            print("[2/5] Building audit pipeline...")
-            orchestrator = SequentialOrchestrator([
-                monitor_agent,
-                calculation_agent,
-                policy_agent,
-                reporting_agent,
-            ])
-            self.context = orchestrator.context  # Store for external access
-            print("✓ Sequential pipeline configured\n")
-            
-            # Initialize context with supplier data
-            print("[3/5] Initializing context...")
-            orchestrator.context.state["supplier_name"] = supplier_name
-            orchestrator.context.state["emissions"] = emissions
-            orchestrator.context.state["violations"] = violations
-            print(f"✓ Context initialized with supplier data\n")
-            
-            # Run the pipeline
-            print(f"[4/5] Executing multi-agent audit for {supplier_name}...\n")
-            
-            query = f"""Conduct a comprehensive ESG audit for supplier: {supplier_name}
+            print("  > All 4 agents created\n")
 
-Supplier Details:
-- Name: {supplier_name}
-- Annual CO2 Emissions: {emissions} tons
-- Regulatory Violations: {violations}
+            # Initialize shared context
+            context = AgentContext()
+            context.state["supplier_name"] = supplier_name
+            context.state["emissions"] = emissions
+            context.state["violations"] = violations
+            self.context = context
 
-Please execute the full audit workflow:
-1. Search for external risk factors and recent news
-2. Calculate ESG risk scores
-3. Apply policy enforcement rules
-4. Generate comprehensive audit report
-"""
-            
-            result = orchestrator.run(query)
-            
-            print(f"[5/5] Pipeline completed successfully\n")
-            
-            # Extract final report
-            report_text = result.get("final_output", "")
-            
+            query = (
+                f"Conduct a comprehensive ESG audit for supplier: {supplier_name}. "
+                f"Emissions: {emissions} tons CO2. Violations: {violations}."
+            )
+
+            # ---------------------------------------------------------- #
+            #  STEP 2: MonitorAgent — External risk detection
+            # ---------------------------------------------------------- #
+            print("[2/7] MonitorAgent: Searching for external risks...")
+            monitor_output = monitor_agent.execute(context, query)
+            print(f"  > Monitor complete (external risks captured)\n")
+
+            # ---------------------------------------------------------- #
+            #  STEP 3: CalculationAgent — Deterministic scoring
+            # ---------------------------------------------------------- #
+            print("[3/7] CalculationAgent: Computing ESG risk score...")
+            calc_output = calculation_agent.execute(context, monitor_output)
+            risk_score = context.state.get("ESG_RISK_SCORE", 0)
+            classification = context.state.get("risk_classification", "Unknown")
+            print(f"  > Score: {risk_score:.2f} | Class: {classification}\n")
+
+            # ---------------------------------------------------------- #
+            #  BLOCKCHAIN POINT 1: Score Anchoring
+            # ---------------------------------------------------------- #
+            print("[  ] BLOCKCHAIN: Anchoring score on-chain...")
+            try:
+                score_result = blockchain.anchor_score(
+                    supplier_name=supplier_name,
+                    risk_score=risk_score,
+                    classification=classification,
+                    emissions=emissions,
+                    violations=violations,
+                    emissions_score=context.state.get("emissions_score", 0),
+                    violations_score=context.state.get("violations_score", 0),
+                    external_risk_score=context.state.get("external_risk_score", 0),
+                )
+                score_anchor_tx = score_result.get("tx_id")
+                context.state["score_anchor_tx"] = score_anchor_tx
+                context.state["score_data_hash"] = score_result.get("data_hash", "")
+            except Exception as e:
+                print(f"  [Blockchain] Score anchor failed: {e}")
+            print()
+
+            # ---------------------------------------------------------- #
+            #  STEP 4: PolicyAgent — HITL enforcement
+            # ---------------------------------------------------------- #
+            print("[4/7] PolicyAgent: Enforcing compliance policy...")
+            policy_output = policy_agent.execute(context, calc_output)
+            policy_outcome = context.state.get("policy_decision_outcome", {})
+            requires_hitl = policy_outcome.get("human_approval_required", False)
+            decision = policy_outcome.get("decision", "N/A")
+            reason = policy_outcome.get("reason", "")
+            action = policy_outcome.get("recommended_action", "")
+            hitl_str = "HITL REQUIRED" if requires_hitl else "Auto-approved"
+            print(f"  > Decision: {decision} | {hitl_str}\n")
+
+            # ---------------------------------------------------------- #
+            #  BLOCKCHAIN POINT 2: HITL Decision Ledger
+            # ---------------------------------------------------------- #
+            print("[  ] BLOCKCHAIN: Recording HITL decision on-chain...")
+            try:
+                hitl_result = blockchain.record_hitl_decision(
+                    supplier_name=supplier_name,
+                    score_anchor_tx=score_anchor_tx,
+                    approved=not requires_hitl,  # Auto-approved if no HITL needed
+                    risk_score=risk_score,
+                    decision=decision,
+                    reason=reason,
+                    recommended_action=action,
+                )
+                hitl_decision_tx = hitl_result.get("tx_id")
+                context.state["hitl_decision_tx"] = hitl_decision_tx
+            except Exception as e:
+                print(f"  [Blockchain] HITL decision recording failed: {e}")
+            print()
+
+            # ---------------------------------------------------------- #
+            #  STEP 5: ReportingAgent — Executive summary
+            # ---------------------------------------------------------- #
+            print("[5/7] ReportingAgent: Generating executive report...")
+            # Enrich context with blockchain references before reporting
+            context.state["blockchain_score_tx"] = score_anchor_tx or "N/A"
+            context.state["blockchain_hitl_tx"] = hitl_decision_tx or "N/A"
+
+            report_output = reporting_agent.execute(context, policy_output)
+            report_text = report_output
+            print(f"  > Report generated ({len(report_text)} chars)\n")
+
             # If report is empty or too short, use fallback
             if not report_text or len(report_text) < 200:
-                print("⚠️  Generating fallback report...")
+                print("  > Generating fallback report...")
                 report_text = self._generate_fallback_report(
-                    supplier_name, emissions, violations, 
-                    orchestrator.context.state
+                    supplier_name, emissions, violations, context.state
                 )
-            
+
+            # ---------------------------------------------------------- #
+            #  BLOCKCHAIN POINT 3: Report Hash Registry
+            # ---------------------------------------------------------- #
+            print("[6/7] BLOCKCHAIN: Registering report hash on-chain...")
+            try:
+                report_result = blockchain.register_report_hash(
+                    supplier_name=supplier_name,
+                    score_anchor_tx=score_anchor_tx,
+                    hitl_decision_tx=hitl_decision_tx,
+                    report_text=report_text,
+                )
+                report_hash_tx = report_result.get("tx_id")
+                context.state["report_hash_tx"] = report_hash_tx
+                context.state["report_verification_code"] = report_result.get("verification_code", "")
+            except Exception as e:
+                print(f"  [Blockchain] Report hash registration failed: {e}")
+
+            # ---------------------------------------------------------- #
+            #  STEP 7: Complete
+            # ---------------------------------------------------------- #
+            print(f"\n[7/7] Pipeline complete!")
             print(f"\n{'='*60}")
-            print(f"PIPELINE COMPLETE - Report Generated")
+            print(f"CHAIN OF CUSTODY (Algorand Testnet)")
+            print(f"{'='*60}")
+            print(f"  1. Score Anchor TX:   {(score_anchor_tx or 'N/A')[:30]}...")
+            print(f"  2. HITL Decision TX:  {(hitl_decision_tx or 'N/A')[:30]}...")
+            print(f"  3. Report Hash TX:    {(report_hash_tx or 'N/A')[:30]}...")
             print(f"{'='*60}\n")
-            
+
             return CoordinatorResponse(text=report_text)
-            
+
         except Exception as e:
-            print(f"\n❌ Error in pipeline: {e}")
+            print(f"\n  Error in pipeline: {e}")
             import traceback
             traceback.print_exc()
-            
+
             # Fallback to deterministic report
             risk_data = calculate_carbon_score(emissions, violations)
             policy_data = enforce_policy_hitl(risk_data["risk_score"], supplier_name)
-            
+
             fallback_report = self._generate_fallback_report(
                 supplier_name, emissions, violations,
                 {"ESG_RISK_SCORE": risk_data["risk_score"],
@@ -274,15 +368,20 @@ REFERENCES & RESOURCES:
         return report_text
 
 
+
 def create_root_coordinator(client):
     """
-    Creates the Root Coordinator using custom framework
-    
-    Workflow:
-    1. Monitor Agent: Gathers external risk data via search
-    2. Calculation Agent: Deterministic risk scoring
-    3. Policy Agent: HITL enforcement
-    4. Reporting Agent: Executive summary
+    Creates the Root Coordinator with 3-point blockchain integration.
+
+    Pipeline:
+    1. MonitorAgent:      External risk detection (Tavily Search)
+    2. CalculationAgent:  Deterministic ESG risk scoring
+       -> BLOCKCHAIN:     Score Anchor (immutable score + data hash)
+    3. PolicyAgent:       HITL compliance enforcement
+       -> BLOCKCHAIN:     HITL Decision Ledger (wallet-signed proof)
+    4. ReportingAgent:    Executive audit report
+       -> BLOCKCHAIN:     Report Hash Registry (SHA-256 tamper detection)
     """
-    
+
     return RootCoordinator(client)
+

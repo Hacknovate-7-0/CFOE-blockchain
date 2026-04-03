@@ -2,8 +2,10 @@ const statusEl = document.getElementById("status");
 const logPanel = document.getElementById("log-panel");
 const logOutput = document.getElementById("log-output");
 const latestEl = document.getElementById("latest-result");
+const blockchainInfoEl = document.getElementById("blockchain-info");
 const historyBody = document.getElementById("history-body");
 const metricsEl = document.getElementById("metrics");
+const blockchainStatusEl = document.getElementById("blockchain-status");
 const filterEl = document.getElementById("risk-filter");
 const searchEl = document.getElementById("search");
 const compareBox = document.getElementById("compare-box");
@@ -125,6 +127,52 @@ async function fetchMetrics() {
     .join("");
 }
 
+async function fetchBlockchainStatus() {
+  try {
+    const res = await fetch("/api/blockchain/status");
+    const data = await res.json();
+
+    const statusBadge = data.connected 
+      ? '<span class="badge low">Connected</span>' 
+      : '<span class="badge moderate">Offline</span>';
+
+    blockchainStatusEl.innerHTML = `
+      <div class="blockchain-grid">
+        <div class="blockchain-item">
+          <span class="blockchain-label">Status:</span>
+          <span>${statusBadge}</span>
+        </div>
+        <div class="blockchain-item">
+          <span class="blockchain-label">Network:</span>
+          <span class="blockchain-value">${data.network}</span>
+        </div>
+        <div class="blockchain-item">
+          <span class="blockchain-label">Address:</span>
+          <span class="blockchain-value">${data.address}</span>
+        </div>
+        <div class="blockchain-item">
+          <span class="blockchain-label">Balance:</span>
+          <span class="blockchain-value">${data.balance.toFixed(6)} ALGO</span>
+        </div>
+        <div class="blockchain-item">
+          <span class="blockchain-label">Score Anchors:</span>
+          <span class="blockchain-value">${data.score_anchors} (${data.on_chain_count} on-chain)</span>
+        </div>
+        <div class="blockchain-item">
+          <span class="blockchain-label">HITL Decisions:</span>
+          <span class="blockchain-value">${data.hitl_decisions}</span>
+        </div>
+        <div class="blockchain-item">
+          <span class="blockchain-label">Report Hashes:</span>
+          <span class="blockchain-value">${data.report_hashes}</span>
+        </div>
+      </div>
+    `;
+  } catch (err) {
+    blockchainStatusEl.innerHTML = '<p class="error">Failed to load blockchain status</p>';
+  }
+}
+
 async function fetchHistory() {
   const res = await fetch("/api/audits?limit=200");
   const data = await res.json();
@@ -170,6 +218,57 @@ function renderLatest(item) {
       <div class="report">${item.report_text || "No report generated."}</div>
     </div>
   `;
+  
+  // Display blockchain info if available
+  if (item.blockchain) {
+    const bc = item.blockchain;
+    const onChainBadge = bc.on_chain 
+      ? '<span class="badge low">On-Chain</span>' 
+      : '<span class="badge moderate">Local</span>';
+    
+    blockchainInfoEl.style.display = 'block';
+    blockchainInfoEl.innerHTML = `
+      <h3>⛓️ Blockchain Verification</h3>
+      <div class="blockchain-details">
+        <div class="blockchain-row">
+          <span class="blockchain-label">Status:</span>
+          <span>${onChainBadge}</span>
+        </div>
+        ${bc.score_tx ? `
+          <div class="blockchain-row">
+            <span class="blockchain-label">Score TX:</span>
+            <span class="blockchain-value mono">${bc.score_tx}</span>
+          </div>
+        ` : ''}
+        ${bc.score_hash ? `
+          <div class="blockchain-row">
+            <span class="blockchain-label">Data Hash:</span>
+            <span class="blockchain-value mono">${bc.score_hash.substring(0, 32)}...</span>
+          </div>
+        ` : ''}
+        ${bc.verification_code ? `
+          <div class="blockchain-row">
+            <span class="blockchain-label">Verify Code:</span>
+            <span class="blockchain-value mono highlight">${bc.verification_code}</span>
+          </div>
+        ` : ''}
+        ${bc.report_tx ? `
+          <div class="blockchain-row">
+            <span class="blockchain-label">Report TX:</span>
+            <span class="blockchain-value mono">${bc.report_tx}</span>
+          </div>
+        ` : ''}
+        ${bc.hitl_tx ? `
+          <div class="blockchain-row">
+            <span class="blockchain-label">HITL TX:</span>
+            <span class="blockchain-value mono">${bc.hitl_tx}</span>
+          </div>
+        ` : ''}
+      </div>
+    `;
+  } else {
+    blockchainInfoEl.style.display = 'none';
+  }
 }
 
 function renderHistory() {
@@ -301,6 +400,22 @@ function openSelectedDownload() {
 
 function openInfoDialog(item) {
   const downloadAction = `<button type="button" id="info-download-btn">Download Files</button>`;
+  
+  let blockchainSection = '';
+  if (item.blockchain) {
+    const bc = item.blockchain;
+    blockchainSection = `
+      <hr/>
+      <h4>⛓️ Blockchain Verification</h4>
+      <p><strong>Status:</strong> ${bc.on_chain ? 'On-Chain' : 'Local Only'}</p>
+      ${bc.score_tx ? `<p><strong>Score TX:</strong> <code>${bc.score_tx}</code></p>` : ''}
+      ${bc.score_hash ? `<p><strong>Data Hash:</strong> <code>${bc.score_hash.substring(0, 40)}...</code></p>` : ''}
+      ${bc.verification_code ? `<p><strong>Verification Code:</strong> <code class="highlight">${bc.verification_code}</code></p>` : ''}
+      ${bc.report_tx ? `<p><strong>Report TX:</strong> <code>${bc.report_tx}</code></p>` : ''}
+      ${bc.report_hash ? `<p><strong>Report Hash:</strong> <code>${bc.report_hash.substring(0, 40)}...</code></p>` : ''}
+      ${bc.hitl_tx ? `<p><strong>HITL Decision TX:</strong> <code>${bc.hitl_tx}</code></p>` : ''}
+    `;
+  }
 
   infoContent.innerHTML = `
     <p><strong>Job ID:</strong> ${item.job_id || "-"}</p>
@@ -315,6 +430,7 @@ function openInfoDialog(item) {
     <p><strong>Policy Reason:</strong> ${item.policy_reason}</p>
     <p><strong>Recommended Action:</strong> ${item.recommended_action}</p>
     <p><strong>Report Source:</strong> ${item.report_source}</p>
+    ${blockchainSection}
     ${downloadAction}
     <div class="info-report"><strong>Executive Report</strong>\n${item.report_text || "No report generated."}</div>
   `;
@@ -603,6 +719,7 @@ async function submitAudit(event) {
     setStatus(`Audit complete for ${result.supplier_name}.`);
     renderLatest(result);
     await fetchMetrics();
+    await fetchBlockchainStatus();
     await fetchHistory();
     
     // Hide log panel after 3 seconds
@@ -635,6 +752,7 @@ rejectBtn.addEventListener("click", () => handleApproval("reject"));
 approvalCancelBtn.addEventListener("click", () => approvalDialog.close());
 document.getElementById("refresh-btn").addEventListener("click", async () => {
   await fetchMetrics();
+  await fetchBlockchainStatus();
   await fetchHistory();
   setStatus("Data refreshed.");
 });
@@ -643,6 +761,7 @@ document.getElementById("clear-btn").addEventListener("click", clearHistory);
 (async function init() {
   connectLogSocket();
   await fetchMetrics();
+  await fetchBlockchainStatus();
   await fetchHistory();
   setStatus("Dashboard ready.");
 })();
