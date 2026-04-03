@@ -60,6 +60,7 @@ CfoE is a multi-agent ESG audit system that helps teams evaluate supplier carbon
 | Blockchain Integration        | On-chain audit anchoring with Algorand              |
 | AI Reporting                  | Executive summaries and recommendations             |
 | Web Dashboard                 | Submit, compare, and track audits interactively     |
+| Real-Time Simulator           | Live emissions streaming and one-click data audits  |
 | Audit Info Modal              | Inspect full details for any selected history audit |
 | Multi-Format Output Export    | Per-job exports in JSON/TXT/MD/HTML/CSV/PDF/DOCX    |
 | Local History Store           | Persist previous audits for analysis                |
@@ -177,6 +178,7 @@ uvicorn webapp:app --reload
 ```mermaid
 graph TB
     U[User / Analyst] --> UI[Web UI or CLI or Notebook]
+    SIM[Carbon Simulator] -->|One-Click Audit| API
     UI --> API[Audit API Layer]
 
     subgraph CORE[Core Audit Engine]
@@ -234,7 +236,7 @@ sequenceDiagram
     C-->>B: Final consolidated result
     B->>H: Save audit entry
     H-->>B: Stored
-    B-->>F: JSON response
+    B-->>F: JSON respons1
     F-->>A: Render report, metrics, and history
 ```
 
@@ -258,6 +260,9 @@ CO2 footprint/
 │   └── static/
 │       ├── app.js
 │       └── styles.css
+├── simulator/
+│   ├── simulator.py              # FastAPI real-time emissions generator (port 8000)
+│   └── dashboard.html            # Standalone visual dashboard for the simulator
 ├── data/
 │   └── audit_history.json
 ├── outputs/
@@ -290,14 +295,27 @@ CO2 footprint/
 
 ## User Instructions
 
-### Option A: Web Dashboard (Recommended)
+### Option A: Web Dashboard & Simulator (Recommended)
 
+To fully utilize the pipeline alongside the real-time data generator, open two terminal windows.
+
+**Terminal 1: Main Compliance Engine**
 1. Activate virtual environment.
 2. Install dependencies: `pip install -r requirements.txt`
-3. Start app: `uvicorn webapp:app --reload`
-4. Open: `http://127.0.0.1:8000`
-5. Submit supplier data with new Gazette-compliant fields:
-   - **Sector:** Select industry (aluminium, refinery, petrochemicals, textiles, default)
+3. Start app: `uvicorn webapp:app --reload --port 8001`
+4. Open the CfoE Dashboard: `http://localhost:8001`
+5. Submit supplier data manually, or wait for the simulator to push data.
+
+**Terminal 2: Real-Time Emitter Simulator**
+1. Activate virtual environment.
+2. Start simulator: `uvicorn simulator.simulator:app --reload --port 8000`
+3. Open the Simulator Dashboard: `http://localhost:8000/`
+4. Click **Start** to begin tracking live process emissions.
+5. Watch the ESG score continuously estimate based on annualized CO₂.
+6. Click **Run Audit & Send to CfoE** to instantly push current telemetry to the main app on port 8001.
+
+When submitting manually in the CfoE dashboard, use the Gazette-compliant fields:
+- **Sector:** Select industry (aluminium, refinery, petrochemicals, textiles, default)
    - **Production Volume:** Optional for normalized intensity calculation
    - **Production Unit:** tonne, MBBLS, or NRGF
    - **Registry ID:** Optional entity registration number (e.g., REFOE001MP)
@@ -361,23 +379,34 @@ No blockchain setup required! Connect your Pera Wallet directly from the browser
 
 ---
 
-**Option 2: Manual .env Configuration**
+**Option 2: Manual .env Configuration (Server-Side Signing)**
 
-For automated scripts or if you prefer manual setup:
+For automated on-chain transactions with server-side signing:
 
-1. Get a free Algorand wallet at [MyAlgo Wallet](https://wallet.myalgo.com/) or [Pera Wallet](https://perawallet.app/)
-2. Fund your testnet wallet at [Algorand Testnet Dispenser](https://bank.testnet.algorand.network/)
+1. Get your Algorand wallet mnemonic phrase (25 words) from Defly/Pera Wallet
+2. Convert mnemonic to private key:
+   ```bash
+   # Use the provided conversion script
+   python convert_mnemonic.py
+   ```
 3. Add credentials to `.env`:
 
 ```env
-# Blockchain Configuration (Optional)
+# Blockchain Configuration
 ALGORAND_ADDRESS=your_wallet_address_here
 ALGORAND_PRIVATE_KEY=your_private_key_here
 ALGOD_SERVER=https://testnet-api.algonode.cloud
 ALGOD_TOKEN=
 ```
 
-4. Restart the app - blockchain features will activate automatically!
+4. **Delete `convert_mnemonic.py` immediately after use for security**
+5. Restart the app - all transactions will be sent on-chain automatically!
+
+**Security Notes:**
+- ⚠️ Never share your private key or mnemonic phrase
+- ⚠️ Ensure `.env` is in `.gitignore`
+- ⚠️ Use testnet only for development
+- ⚠️ For production, implement proper key management (HSM, KMS, etc.)
 
 ### Local Development (AlgoKit)
 
@@ -478,9 +507,11 @@ Use this sequence right after activating your virtual environment and installing
 # Optional: quick sanity check
 python test_setup.py
 
-# Run web dashboard
-uvicorn webapp:app --reload
-# Open http://127.0.0.1:8000
+# Run main CfoE dashboard on port 8001
+uvicorn webapp:app --reload --port 8001
+
+# Run Simulator on port 8000 (in a separate terminal)
+uvicorn webapp:app --reload --port 8000
 ```
 
 ```bash
