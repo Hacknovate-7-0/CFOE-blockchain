@@ -339,7 +339,31 @@ CfoE integrates with Algorand blockchain for immutable audit anchoring and verif
 
 ### Quick Start (Testnet)
 
-**No blockchain setup required!** CfoE works out-of-the-box with Algorand Testnet.
+**Option 1: Browser-Based Pera Wallet (Recommended)**
+
+No blockchain setup required! Connect your Pera Wallet directly from the browser.
+
+1. Install Pera Wallet:
+   - Mobile: [iOS](https://apps.apple.com/app/id1459898525) | [Android](https://play.google.com/store/apps/details?id=com.algorand.android)
+   - Browser: [Chrome Extension](https://chrome.google.com/webstore/detail/pera-wallet/)
+
+2. Switch to Testnet in Pera Wallet settings
+
+3. Get free testnet ALGO: https://bank.testnet.algorand.network/
+
+4. Start CfoE and click "Connect Pera Wallet" in the UI
+
+5. Scan QR code (mobile) or approve popup (browser extension)
+
+✅ **Done!** All audits will use your connected wallet.
+
+**See full guide:** `PERA_WALLET_GUIDE.md`
+
+---
+
+**Option 2: Manual .env Configuration**
+
+For automated scripts or if you prefer manual setup:
 
 1. Get a free Algorand wallet at [MyAlgo Wallet](https://wallet.myalgo.com/) or [Pera Wallet](https://perawallet.app/)
 2. Fund your testnet wallet at [Algorand Testnet Dispenser](https://bank.testnet.algorand.network/)

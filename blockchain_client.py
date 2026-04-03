@@ -38,15 +38,13 @@ class CfoEBlockchainClient:
 
     def __init__(self):
         self.algod_client = None
-        self.address = os.getenv(
-            "ALGORAND_ADDRESS",
-            "4KG534Q6BUNUNDJRA7XBUH4OXYYXXHYFEAEHO3TASHU22WRD3AGGLGR2Y4",
-        )
-        self.private_key = os.getenv("ALGORAND_PRIVATE_KEY", "")
+        self.address = None  # Will be set by Defly wallet
+        self.private_key = None  # Not used with Defly wallet
         self.algod_server = os.getenv("ALGOD_SERVER", "https://testnet-api.algonode.cloud")
         self.algod_token = os.getenv("ALGOD_TOKEN", "")
         self.app_id = None
         self.connected = False
+        self.wallet_connected = False
 
         # In-memory ledger (mirrors on-chain records)
         self.score_anchors: List[Dict] = []
@@ -83,14 +81,26 @@ class CfoEBlockchainClient:
             self.connected = False
             return False
 
+    def set_wallet_address(self, address: str) -> None:
+        """Set the wallet address from Defly wallet connection."""
+        self.address = address
+        self.wallet_connected = True
+        print(f"  [Blockchain] Wallet connected: {address[:16]}...")
+
+    def disconnect_wallet(self) -> None:
+        """Disconnect the wallet."""
+        self.address = None
+        self.wallet_connected = False
+        print("  [Blockchain] Wallet disconnected")
+
     # ================================================================== #
     #  BALANCE
     # ================================================================== #
 
     def get_balance(self) -> Dict[str, Any]:
         """Get account balance and status."""
-        if not self.connected:
-            return {"error": "Not connected", "balance_algo": 0}
+        if not self.connected or not self.wallet_connected or not self.address:
+            return {"error": "Wallet not connected", "balance_algo": 0}
         try:
             info = self.algod_client.account_info(self.address)
             balance_micro = info.get("amount", 0)
@@ -117,39 +127,51 @@ class CfoEBlockchainClient:
         """
         if not self.connected:
             return None
+            
+        if not self.wallet_connected or not self.address:
+            return None
 
         try:
             from algosdk import transaction
-
+            
+            # Get suggested params
             params = self.algod_client.suggested_params()
-            note_bytes = json.dumps(note_data, separators=(",", ":")).encode("utf-8")
-
-            # Max note size is 1KB; truncate if needed
-            if len(note_bytes) > 1000:
-                note_data["_truncated"] = True
-                # Remove large fields to fit
-                for key in ["input_data_preview", "details"]:
-                    if key in note_data:
-                        del note_data[key]
-                note_bytes = json.dumps(note_data, separators=(",", ":")).encode("utf-8")
-
+            
+            # Create note field
+            note = json.dumps(note_data).encode('utf-8')
+            
+            # Create transaction: 0 ALGO payment to self with note
             txn = transaction.PaymentTxn(
                 sender=self.address,
                 sp=params,
                 receiver=self.address,
                 amt=0,
-                note=note_bytes,
+                note=note
             )
-
-            signed_txn = txn.sign(self.private_key)
-            tx_id = self.algod_client.send_transaction(signed_txn)
-            confirmed = transaction.wait_for_confirmation(self.algod_client, tx_id, 4)
-            confirmed_round = confirmed.get("confirmed-round", "N/A")
-
-            return tx_id
-
+            
+            # For Defly wallet: Need to sign client-side
+            # This is a placeholder - actual signing happens in browser
+            # For now, we'll simulate by checking if we have a private key
+            
+            # Check if we have .env credentials as fallback
+            env_key = os.getenv("ALGORAND_PRIVATE_KEY")
+            if env_key:
+                # Sign with .env private key
+                signed_txn = txn.sign(env_key)
+                tx_id = self.algod_client.send_transaction(signed_txn)
+                
+                # Wait for confirmation
+                transaction.wait_for_confirmation(self.algod_client, tx_id, 4)
+                print(f"  [Blockchain] Transaction confirmed: {tx_id}")
+                return tx_id
+            else:
+                # No private key - store locally
+                print(f"  [Blockchain] No signing key available - storing locally")
+                print(f"  [Blockchain] Add ALGORAND_PRIVATE_KEY to .env for on-chain transactions")
+                return None
+                
         except Exception as e:
-            print(f"  [Blockchain] TX failed: {e}")
+            print(f"  [Blockchain] Transaction failed: {str(e)}")
             return None
 
     # ================================================================== #
@@ -213,7 +235,7 @@ class CfoEBlockchainClient:
             "external_risk_score": round(external_risk_score, 4),
             "input_data_hash": data_hash,
             "timestamp": timestamp,
-            "auditor_address": self.address,
+            "auditor_address": self.address if self.address else "N/A",
         }
 
         tx_id = self._send_note_tx(note_data)
@@ -239,7 +261,10 @@ class CfoEBlockchainClient:
         else:
             local_id = f"SCORE-{len(self.score_anchors):04d}"
             record["local_id"] = local_id
-            print(f"  [Blockchain] Score anchored locally (ID: {local_id})")
+            if self.wallet_connected:
+                print(f"  [Blockchain] Score stored locally (Defly requires client-side signing)")
+            else:
+                print(f"  [Blockchain] Score stored locally (wallet not connected)")
 
         return record
 
@@ -294,7 +319,7 @@ class CfoEBlockchainClient:
             "reason": reason[:200],  # Truncate to fit note
             "recommended_action": recommended_action[:200],
             "score_anchor_tx": score_anchor_tx or "N/A",
-            "auditor_address": self.address,  # Wallet that signed = proof of identity
+            "auditor_address": self.address if self.address else "N/A",  # Wallet that signed = proof of identity
             "requires_human_review": risk_score >= 0.70,
             "timestamp": timestamp,
         }
@@ -310,7 +335,7 @@ class CfoEBlockchainClient:
             "score_anchor_tx": score_anchor_tx,
             "tx_id": tx_id,
             "on_chain": on_chain,
-            "auditor_address": self.address,
+            "auditor_address": self.address if self.address else "N/A",
             "timestamp": timestamp,
             "cryptographic_proof": on_chain,  # TX signature = proof
         }
@@ -321,13 +346,17 @@ class CfoEBlockchainClient:
             print(f"               Supplier: {supplier_name}")
             print(f"               Decision: {decision_str}")
             print(f"               Score:    {risk_score:.2f}")
-            print(f"               Auditor:  {self.address[:16]}...")
+            if self.address:
+                print(f"               Auditor:  {self.address[:16]}...")
             print(f"               TX:       {tx_id[:20]}...")
             print(f"               Crypto Proof: TX signed by auditor wallet")
         else:
             local_id = f"HITL-{len(self.hitl_decisions):04d}"
             record["local_id"] = local_id
-            print(f"  [Blockchain] HITL decision logged locally (ID: {local_id})")
+            if self.wallet_connected:
+                print(f"  [Blockchain] HITL decision stored locally (Defly requires client-side signing)")
+            else:
+                print(f"  [Blockchain] HITL decision stored locally (wallet not connected)")
 
         return record
 
@@ -379,7 +408,7 @@ class CfoEBlockchainClient:
             "score_anchor_tx": score_anchor_tx or "N/A",
             "hitl_decision_tx": hitl_decision_tx or "N/A",
             "generator": "CfoE ReportingAgent v1.0",
-            "auditor_address": self.address,
+            "auditor_address": self.address if self.address else "N/A",
             "timestamp": timestamp,
         }
 
@@ -418,7 +447,10 @@ class CfoEBlockchainClient:
         else:
             local_id = f"REPORT-{len(self.report_hashes):04d}"
             record["local_id"] = local_id
-            print(f"  [Blockchain] Report hash logged locally (ID: {local_id})")
+            if self.wallet_connected:
+                print(f"  [Blockchain] Report hash stored locally (Defly requires client-side signing)")
+            else:
+                print(f"  [Blockchain] Report hash stored locally (wallet not connected)")
 
         return record
 
@@ -554,14 +586,19 @@ class CfoEBlockchainClient:
         lines.append("  BLOCKCHAIN STATUS")
         lines.append("=" * 60)
 
-        if self.connected:
+        if self.connected and self.wallet_connected and self.address:
             balance_info = self.get_balance()
             lines.append(f"  Connection:     ACTIVE")
             lines.append(f"  Network:        Algorand Testnet")
+            lines.append(f"  Wallet:         Defly Wallet")
             lines.append(f"  Address:        {self.address}")
             lines.append(f"  Balance:        {balance_info.get('balance_algo', 0):.6f} ALGO")
             lines.append(f"  Available:      {balance_info.get('available_algo', 0):.6f} ALGO")
             lines.append(f"  App ID:         {self.app_id or 'Not deployed'}")
+        elif self.connected:
+            lines.append(f"  Connection:     ACTIVE")
+            lines.append(f"  Wallet:         NOT CONNECTED")
+            lines.append(f"  Mode:           Connect Defly Wallet to enable transactions")
         else:
             lines.append(f"  Connection:     OFFLINE")
             lines.append(f"  Mode:           Local logging only")

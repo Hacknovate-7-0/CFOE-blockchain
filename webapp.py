@@ -223,6 +223,11 @@ def build_fallback_report(req: AuditRequest, risk_data: dict[str, Any], policy_d
 def run_audit(req: AuditRequest) -> dict[str, Any]:
     log_queue.put({"type": "info", "message": f"Starting audit for {req.supplier_name}..."})
     
+    # Check if wallet is connected
+    bc = get_blockchain_client()
+    if not bc.wallet_connected:
+        log_queue.put({"type": "warning", "message": "⚠ Wallet not connected - transactions will be stored locally"})
+    
     log_queue.put({"type": "info", "message": "[1/5] Calculating ESG risk scores..."})
     
     # Calculate audit date for pro-rata
@@ -241,17 +246,32 @@ def run_audit(req: AuditRequest) -> dict[str, Any]:
     
     # Blockchain: Anchor score
     bc = get_blockchain_client()
-    score_anchor = bc.anchor_score(
-        supplier_name=req.supplier_name,
-        risk_score=risk_data["risk_score"],
-        classification=risk_data["classification"],
-        emissions=req.emissions,
-        violations=req.violations,
-        emissions_score=risk_data["emissions_score"],
-        violations_score=risk_data["violations_score"],
-        external_risk_score=risk_data.get("external_risk_score", 0.0)
-    )
-    log_queue.put({"type": "success", "message": f"✓ Score anchored on blockchain: {score_anchor.get('tx_id', 'LOCAL')[:20]}..."})
+    if bc.wallet_connected and bc.address:
+        log_queue.put({"type": "info", "message": f"[Blockchain] Using wallet: {bc.address[:16]}..."})
+    else:
+        log_queue.put({"type": "info", "message": "[Blockchain] Wallet not connected - storing locally"})
+    
+    try:
+        score_anchor = bc.anchor_score(
+            supplier_name=req.supplier_name,
+            risk_score=risk_data["risk_score"],
+            classification=risk_data["classification"],
+            emissions=req.emissions,
+            violations=req.violations,
+            emissions_score=risk_data["emissions_score"],
+            violations_score=risk_data["violations_score"],
+            external_risk_score=risk_data.get("external_risk_score", 0.0)
+        )
+    except Exception as e:
+        log_queue.put({"type": "error", "message": f"✗ Score anchor exception: {str(e)}"})
+        score_anchor = None
+    
+    if score_anchor:
+        tx_id = score_anchor.get('tx_id') or score_anchor.get('local_id', 'LOCAL')
+        log_queue.put({"type": "success", "message": f"✓ Score anchored on blockchain: {tx_id[:20]}..."})
+    else:
+        log_queue.put({"type": "error", "message": "✗ Score anchor failed - returned None"})
+        score_anchor = {"local_id": "FALLBACK", "on_chain": False}
     
     log_queue.put({"type": "info", "message": "[2/5] Enforcing policy rules..."})
     policy_data = enforce_policy_hitl(risk_score=risk_data["risk_score"], supplier_name=req.supplier_name)
@@ -283,13 +303,22 @@ def run_audit(req: AuditRequest) -> dict[str, Any]:
 
     # Blockchain: Register report hash
     log_queue.put({"type": "info", "message": "[4/5] Recording report hash on blockchain..."})
-    report_hash_record = bc.register_report_hash(
-        supplier_name=req.supplier_name,
-        score_anchor_tx=score_anchor.get("tx_id"),
-        hitl_decision_tx=None,
-        report_text=report_text
-    )
-    log_queue.put({"type": "success", "message": f"✓ Report hash: {report_hash_record['verification_code']}"})
+    try:
+        report_hash_record = bc.register_report_hash(
+            supplier_name=req.supplier_name,
+            score_anchor_tx=score_anchor.get("tx_id") if score_anchor else None,
+            hitl_decision_tx=None,
+            report_text=report_text
+        )
+    except Exception as e:
+        log_queue.put({"type": "error", "message": f"✗ Report hash exception: {str(e)}"})
+        report_hash_record = None
+    
+    if report_hash_record:
+        log_queue.put({"type": "success", "message": f"✓ Report hash: {report_hash_record['verification_code']}"})
+    else:
+        log_queue.put({"type": "error", "message": "✗ Report hash failed - returned None"})
+        report_hash_record = {"local_id": "FALLBACK", "on_chain": False}
 
     log_queue.put({"type": "info", "message": "[5/5] Finalizing audit results..."})
     result = {
@@ -323,12 +352,12 @@ def run_audit(req: AuditRequest) -> dict[str, Any]:
         "download_links": {},
         "status": "pending_approval" if policy_data["human_approval_required"] else "completed",
         "blockchain": {
-            "score_tx": score_anchor.get("tx_id") or score_anchor.get("local_id"),
-            "score_hash": score_anchor.get("data_hash"),
-            "report_tx": report_hash_record.get("tx_id") or report_hash_record.get("local_id"),
-            "report_hash": report_hash_record.get("report_hash"),
-            "verification_code": report_hash_record.get("verification_code"),
-            "on_chain": score_anchor.get("on_chain", False)
+            "score_tx": score_anchor.get("tx_id") or score_anchor.get("local_id") if score_anchor else None,
+            "score_hash": score_anchor.get("data_hash") if score_anchor else None,
+            "report_tx": report_hash_record.get("tx_id") or report_hash_record.get("local_id") if report_hash_record else None,
+            "report_hash": report_hash_record.get("report_hash") if report_hash_record else None,
+            "verification_code": report_hash_record.get("verification_code") if report_hash_record else None,
+            "on_chain": score_anchor.get("on_chain", False) if score_anchor else False
         }
     }
     
@@ -565,8 +594,12 @@ def create_audit(payload: AuditRequest) -> dict[str, Any]:
     try:
         result = run_audit(payload)
         result["download_links"] = export_audit_files(result)
-    except Exception as exc:  # pragma: no cover
-        raise HTTPException(status_code=500, detail=f"Audit failed: {exc}") from exc
+    except Exception as exc:
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"\n[ERROR] Audit failed with exception:")
+        print(error_trace)
+        raise HTTPException(status_code=500, detail=f"Audit failed: {str(exc)}") from exc
 
     # If human approval required, save to pending queue instead of history
     if result.get("human_approval_required", False):
@@ -784,16 +817,27 @@ def blockchain_status() -> dict[str, Any]:
     balance_info = bc.get_balance()
     history = bc.get_audit_history()
     
+    # Force refresh connection status
+    if not bc.connected:
+        bc.connect()
+        balance_info = bc.get_balance()
+    
+    # Show full address if wallet connected, otherwise show N/A
+    display_address = bc.address if bc.wallet_connected else "N/A"
+    
     return {
-        "connected": bc.connected,
-        "address": bc.address[:16] + "..." if bc.connected else "N/A",
+        "connected": bc.connected and bc.wallet_connected,
+        "address": display_address,
         "balance": balance_info.get("balance_algo", 0),
         "network": "Algorand Testnet" if bc.connected else "Offline",
         "score_anchors": len(history["score_anchors"]),
         "hitl_decisions": len(history["hitl_decisions"]),
         "report_hashes": len(history["report_hashes"]),
-        "on_chain_count": sum(1 for r in history["score_anchors"] if r["on_chain"])
+        "on_chain_count": sum(1 for r in history["score_anchors"] if r["on_chain"]),
+        "wallet": _wallet_state,
+        "wallet_connected": bc.wallet_connected,
     }
+
 
 
 @app.get("/api/registry/validate/{registry_id}")
@@ -825,6 +869,47 @@ def get_compliance_trajectory(supplier_name: str, baseline_year: int = 2023, tar
     return check_compliance_trajectory(supplier_name, history, baseline_year, target_year)
 
 
+# ── Wallet endpoints ──────────────────────────────────────────────
+
+_wallet_state: dict[str, Any] = {"connected": False, "address": None}
+
+
+class WalletConnectRequest(BaseModel):
+    address: str = Field(min_length=1, max_length=128)
+
+
+@app.get("/api/wallet/status")
+def wallet_status() -> dict[str, Any]:
+    """Return the current wallet connection state."""
+    return _wallet_state
+
+
+@app.post("/api/wallet/connect")
+def wallet_connect(payload: WalletConnectRequest) -> dict[str, Any]:
+    """Register a wallet address from the frontend."""
+    _wallet_state["connected"] = True
+    _wallet_state["address"] = payload.address
+    
+    # Connect wallet to blockchain client
+    bc = get_blockchain_client()
+    bc.set_wallet_address(payload.address)
+    
+    return {"status": "ok", "address": payload.address}
+
+
+@app.post("/api/wallet/disconnect")
+def wallet_disconnect() -> dict[str, Any]:
+    """Clear the wallet connection."""
+    _wallet_state["connected"] = False
+    _wallet_state["address"] = None
+    
+    # Disconnect wallet from blockchain client
+    bc = get_blockchain_client()
+    bc.disconnect_wallet()
+    
+    return {"status": "ok"}
+
+
 @app.websocket("/ws/logs")
 async def websocket_logs(websocket: WebSocket):
     await websocket.accept()
@@ -837,3 +922,4 @@ async def websocket_logs(websocket: WebSocket):
             await asyncio.sleep(0.1)
     except WebSocketDisconnect:
         pass
+

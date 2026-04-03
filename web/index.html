@@ -91,6 +91,16 @@
 
         <section class="panel blockchain-panel">
             <h2>⛓️ Blockchain Status</h2>
+            <div class="wallet-connect-section">
+                <div id="wallet-status" class="wallet-status">
+                    <span class="wallet-label">Wallet:</span>
+                    <span id="wallet-address" class="wallet-address">Not connected</span>
+                </div>
+                <div class="wallet-buttons">
+                    <button id="connect-wallet-btn" type="button" class="wallet-btn">Connect Defly Wallet</button>
+                    <button id="disconnect-wallet-btn" type="button" class="wallet-btn danger" style="display: none;">Disconnect</button>
+                </div>
+            </div>
             <div id="blockchain-status" class="blockchain-status"></div>
         </section>
 
@@ -196,6 +206,7 @@
         </dialog>
     </main>
 
+    <script type="module" src="/static/wallet-connect.js"></script>
     <script src="/static/app.js"></script>
 </body>
 
