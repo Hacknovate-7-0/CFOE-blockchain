@@ -24,6 +24,8 @@ from reportlab.lib.pagesizes import A4
 
 from agents.calculation_agent import calculate_carbon_score
 from agents.policy_agent import enforce_policy_hitl
+from agents.registry_agent import validate_registry_id, get_entity_info
+from agents.trajectory_agent import calculate_trajectory, check_compliance_trajectory
 from orchestrators.root_coordinator import create_root_coordinator
 
 from config.groq_config import get_groq_client
@@ -53,6 +55,12 @@ class AuditRequest(BaseModel):
     emissions: float = Field(ge=0)
     violations: int = Field(ge=0, le=500)
     notes: str = Field(default="", max_length=1000)
+    sector: str = Field(default="default")  # Phase 1: Sector-specific targets
+    production_volume: float = Field(default=None, ge=0)  # Phase 2: Normalized metrics
+    production_unit: str = Field(default="tonne")  # Phase 2: Unit for normalization
+    registry_id: str = Field(default="")  # Phase 3: Entity registry
+    baseline_year: int = Field(default=2023)  # Phase 1: Pro-rata calculation
+    target_year: int = Field(default=2027)  # Phase 1: Pro-rata calculation
 
 
 class AuditResponse(BaseModel):
@@ -216,8 +224,20 @@ def run_audit(req: AuditRequest) -> dict[str, Any]:
     log_queue.put({"type": "info", "message": f"Starting audit for {req.supplier_name}..."})
     
     log_queue.put({"type": "info", "message": "[1/5] Calculating ESG risk scores..."})
-    risk_data = calculate_carbon_score(emissions=req.emissions, violations=req.violations)
-    log_queue.put({"type": "success", "message": f"✓ Risk Score: {risk_data['risk_score']} ({risk_data['classification']})"})
+    
+    # Calculate audit date for pro-rata
+    from datetime import datetime
+    audit_date = datetime.now()
+    
+    risk_data = calculate_carbon_score(
+        emissions=req.emissions, 
+        violations=req.violations,
+        sector=req.sector,
+        production_volume=req.production_volume,
+        audit_date=audit_date
+    )
+    
+    log_queue.put({"type": "success", "message": f"✓ Risk Score: {risk_data['risk_score']} ({risk_data['classification']}) - Sector: {risk_data['sector']}"})
     
     # Blockchain: Anchor score
     bc = get_blockchain_client()
@@ -280,6 +300,15 @@ def run_audit(req: AuditRequest) -> dict[str, Any]:
         "emissions": req.emissions,
         "violations": req.violations,
         "notes": req.notes,
+        "sector": risk_data.get("sector", "General Industry"),
+        "sector_key": risk_data.get("sector_key", "default"),
+        "production_volume": req.production_volume,
+        "production_unit": req.production_unit,
+        "registry_id": req.registry_id,
+        "emissions_intensity": risk_data.get("emissions_intensity"),
+        "prorata_progress": risk_data.get("prorata_progress", 0.0),
+        "baseline_year": req.baseline_year,
+        "target_year": req.target_year,
         "risk_score": risk_data["risk_score"],
         "classification": risk_data["classification"],
         "emissions_score": risk_data["emissions_score"],
@@ -527,6 +556,12 @@ def serve_index() -> FileResponse:
 
 @app.post("/api/audit", response_model=AuditResponse)
 def create_audit(payload: AuditRequest) -> dict[str, Any]:
+    # Phase 2: Validate registry ID if provided
+    if payload.registry_id and payload.registry_id.strip():
+        validation = validate_registry_id(payload.registry_id)
+        if not validation["valid"]:
+            raise HTTPException(status_code=400, detail=validation["error"])
+    
     try:
         result = run_audit(payload)
         result["download_links"] = export_audit_files(result)
@@ -759,6 +794,35 @@ def blockchain_status() -> dict[str, Any]:
         "report_hashes": len(history["report_hashes"]),
         "on_chain_count": sum(1 for r in history["score_anchors"] if r["on_chain"])
     }
+
+
+@app.get("/api/registry/validate/{registry_id}")
+def validate_registry(registry_id: str) -> dict[str, Any]:
+    """Validate entity registry ID"""
+    return validate_registry_id(registry_id)
+
+
+@app.get("/api/registry/entity/{registry_id}")
+def get_entity(registry_id: str) -> dict[str, Any]:
+    """Get entity information by registry ID"""
+    entity = get_entity_info(registry_id)
+    if entity is None:
+        raise HTTPException(status_code=404, detail="Entity not found")
+    return entity
+
+
+@app.get("/api/trajectory/{supplier_name}")
+def get_trajectory(supplier_name: str) -> dict[str, Any]:
+    """Get multi-year compliance trajectory for a supplier"""
+    history = load_history()
+    return calculate_trajectory(supplier_name, history)
+
+
+@app.get("/api/trajectory/{supplier_name}/compliance")
+def get_compliance_trajectory(supplier_name: str, baseline_year: int = 2023, target_year: int = 2027) -> dict[str, Any]:
+    """Check if supplier is on track to meet compliance goals"""
+    history = load_history()
+    return check_compliance_trajectory(supplier_name, history, baseline_year, target_year)
 
 
 @app.websocket("/ws/logs")

@@ -1,5 +1,6 @@
 1<p align="center">
-  <img src="https://img.shields.io/badge/CfoE-Carbon%20Footprint%20Optimization%20Engine-0d7c66?style=for-the-badge&logo=leaflet&logoColor=white" alt="CfoE Badge"/>
+<img src="https://img.shields.io/badge/CfoE-Carbon%20Footprint%20Optimization%20Engine-0d7c66?style=for-the-badge&logo=leaflet&logoColor=white" alt="CfoE Badge"/>
+
 </p>
 
 <h1 align="center">Carbon Footprint Optimization Engine (CfoE)</h1>
@@ -21,14 +22,16 @@ CfoE is a multi-agent ESG audit system that helps teams evaluate supplier carbon
 | 2   | [Introduction](#introduction)                                 |
 | 3   | [Table of Contents](#table-of-contents)                       |
 | 4   | [Features](#features)                                         |
-| 5   | [Tech Stack and Prerequisites](#tech-stack-and-prerequisites) |
-| 6   | [Diagram](#diagram)                                           |
-| 7   | [Project Structure](#project-structure)                       |
-| 8   | [User Instructions](#user-instructions)                       |
-| 9   | [Developer Instructions](#developer-instructions)             |
-| 10  | [Contributor Expectations](#contributor-expectations)         |
-| 11  | [Known Issues](#known-issues)                                 |
-| 12  | [Made With](#made-with)                                       |
+| 5   | [Gazette Requirements Compliance](#gazette-requirements-compliance) |
+| 6   | [Tech Stack and Prerequisites](#tech-stack-and-prerequisites) |
+| 7   | [Diagram](#diagram)                                           |
+| 8   | [Project Structure](#project-structure)                       |
+| 9   | [User Instructions](#user-instructions)                       |
+| 10  | [Developer Instructions](#developer-instructions)             |
+| 11  | [Blockchain Setup](#blockchain-setup)                         |
+| 12  | [Contributor Expectations](#contributor-expectations)         |
+| 13  | [Known Issues](#known-issues)                                 |
+| 14  | [Made With](#made-with)                                       |
 
 ---
 
@@ -47,14 +50,94 @@ CfoE is a multi-agent ESG audit system that helps teams evaluate supplier carbon
 | ----------------------------- | --------------------------------------------------- |
 | Multi-Agent Pipeline          | Structured flow from monitoring to final report     |
 | Deterministic Risk Scoring    | Stable and auditable ESG scores for the same inputs |
+| Sector-Specific Targets       | Custom risk thresholds for 5 industry sectors       |
+| Normalized Emissions Metrics  | tCO2eq/tonne, tCO2eq/MBBLS, tCO2eq/NRGF intensity   |
+| Pro-Rata Target Calculation   | Time-adjusted targets for mid-year audits           |
+| Entity Registry Validation    | Obligated entity lookup with registration IDs       |
+| Multi-Year Trajectory         | Historical trend analysis and compliance tracking   |
 | Policy Enforcement            | Automatic action routing based on risk thresholds   |
 | HITL Safety Gate              | High-risk cases marked for human review             |
+| Blockchain Integration        | On-chain audit anchoring with Algorand              |
 | AI Reporting                  | Executive summaries and recommendations             |
 | Web Dashboard                 | Submit, compare, and track audits interactively     |
 | Audit Info Modal              | Inspect full details for any selected history audit |
 | Multi-Format Output Export    | Per-job exports in JSON/TXT/MD/HTML/CSV/PDF/DOCX    |
 | Local History Store           | Persist previous audits for analysis                |
 | Notebook + Script + Web Modes | Flexible usage based on workflow preference         |
+
+---
+
+## Gazette Requirements Compliance
+
+### ✅ All 5 Critical Requirements Implemented
+
+CfoE fully addresses all critical gaps identified in regulatory Gazette requirements:
+
+| # | Gazette Requirement | CfoE Status | Implementation |
+|---|---------------------|-------------|----------------|
+| 1 | **Sector-specific emission intensity targets**<br/>(aluminium, refinery, petrochemicals, textiles) | ✅ **COMPLETE** | 5 sectors with custom low/critical thresholds and baseline/target intensities |
+| 2 | **Normalised output metric per sector**<br/>(tCO2eq/tonne, tCO2eq/MBBLS/NRGF) | ✅ **COMPLETE** | Production volume + unit fields with emissions intensity calculation |
+| 3 | **Multi-year compliance trajectory**<br/>(baseline 2023-24, targets 2025-26 and 2026-27) | ✅ **COMPLETE** | Historical trend analysis with on-track status assessment |
+| 4 | **Obligated entity registry lookup**<br/>(registration no. like REFOE001MP, TXTOE007PB) | ✅ **COMPLETE** | Entity registry with real-time validation API |
+| 5 | **Pro-rata target calculation for mid-year notification**<br/>(Note 3: Jan–Mar 2026 pro-rated from annual target) | ✅ **COMPLETE** | Date-based linear interpolation from baseline to target |
+
+### Feature Details
+
+#### 1. Sector-Specific Targets
+- **Aluminium:** low < 0.30, critical ≥ 0.65 (baseline: 15.0 → target: 10.0 tCO2eq/tonne)
+- **Refinery:** low < 0.35, critical ≥ 0.70 (baseline: 25.0 → target: 18.0 tCO2eq/MBBLS)
+- **Petrochemicals:** low < 0.40, critical ≥ 0.75 (baseline: 30.0 → target: 22.0 tCO2eq/tonne)
+- **Textiles:** low < 0.25, critical ≥ 0.60 (baseline: 8.0 → target: 5.0 tCO2eq/tonne)
+- **General Industry:** low < 0.40, critical ≥ 0.70 (baseline: 20.0 → target: 15.0 tCO2eq/tonne)
+
+#### 2. Normalized Metrics
+```python
+emissions_intensity = emissions / production_volume
+
+# Scoring based on deviation from expected intensity:
+≤ 80% of expected  → 0.05 (excellent)
+≤ 100% of expected → 0.15 (good)
+≤ 120% of expected → 0.30 (acceptable)
+> 120% of expected → 0.50 (poor)
+```
+
+#### 3. Multi-Year Trajectory
+- Tracks historical audits per supplier
+- Calculates trend: 📈 Improving / 📉 Deteriorating / ➡️ Stable
+- Assesses on-track status: ✅ On Track / ⚠️ Behind Schedule
+- Displays recent audit history with scores
+
+#### 4. Entity Registry
+- Sample entities: REFOE001MP, TXTOE007PB, ALMOE003EU, PETOE009AS
+- Real-time validation in UI
+- API endpoints: `/api/registry/validate/{id}`, `/api/registry/entity/{id}`
+
+#### 5. Pro-Rata Calculation
+```python
+progress_ratio = days_elapsed / total_days
+expected_intensity = baseline - (baseline - target) × progress_ratio
+
+# Example (mid-2025, 40% progress):
+Baseline (2023): 20.0 tCO2eq/tonne
+Target (2027): 15.0 tCO2eq/tonne
+Expected: 18.0 tCO2eq/tonne
+```
+
+### Testing Gazette Compliance
+
+```bash
+# Test all Gazette features
+python test_phase1.py          # Sectors, Pro-Rata, Normalized Metrics
+python test_phase2_phase3.py   # Registry, Trajectory
+
+# Start UI for manual testing
+uvicorn webapp:app --reload
+```
+
+### Documentation
+- **Complete Guide:** `CRITICAL_GAPS_IMPLEMENTATION.md`
+- **Quick Reference:** `QUICK_REFERENCE.md`
+- **Summary:** `ALL_GAPS_COMPLETE_SUMMARY.md`
 
 ---
 
@@ -65,6 +148,7 @@ CfoE is a multi-agent ESG audit system that helps teams evaluate supplier carbon
 | Layer         | Technology                            | Purpose                                  |
 | ------------- | ------------------------------------- | ---------------------------------------- |
 | Language      | Python 3.10+                          | Core implementation                      |
+| Blockchain    | Algorand (Testnet)                    | On-chain audit anchoring and verification|
 | AI SDK        | groq                                  | LLM content generation                   |
 | Web API       | FastAPI                               | Backend endpoints for audits and metrics |
 | Web Server    | Uvicorn                               | Local ASGI server                        |
@@ -79,6 +163,8 @@ CfoE is a multi-agent ESG audit system that helps teams evaluate supplier carbon
 | ------------------- | ------------------------------------ |
 | Python 3.10+        | Verified with local venv setup       |
 | Groq API Key        | Set `GROQ_API_KEY` in `.env`         |
+| Algorand Wallet     | Optional for blockchain features     |
+| AlgoKit CLI         | Optional for local blockchain testing|
 | Internet access     | Needed for live model calls          |
 | Virtual environment | Recommended for dependency isolation |
 
@@ -159,7 +245,9 @@ sequenceDiagram
 ```text
 CO2 footprint/
 ├── agents/
-│   ├── calculation_agent.py
+│   ├── calculation_agent.py      # Sector-specific scoring + pro-rata
+│   ├── registry_agent.py         # Entity registry validation
+│   ├── trajectory_agent.py       # Multi-year trend analysis
 │   ├── monitor_agent.py
 │   ├── policy_agent.py
 │   └── reporting_agent.py
@@ -183,11 +271,17 @@ CO2 footprint/
 │       ├── aud-<audit_id>.pdf
 │       └── aud-<audit_id>.docx
 ├── docs/
-│   └── README.md
+│   ├── README.md
+│   ├── CRITICAL_GAPS_IMPLEMENTATION.md
+│   ├── ALL_GAPS_COMPLETE_SUMMARY.md
+│   └── QUICK_REFERENCE.md
+├── blockchain_client.py          # Algorand integration
 ├── webapp.py
 ├── main.py
 ├── main_simple.py
 ├── global-cfoe.ipynb
+├── test_phase1.py                # Test sectors, pro-rata, metrics
+├── test_phase2_phase3.py         # Test registry, trajectory
 ├── requirements.txt
 └── README.md
 ```
@@ -202,15 +296,22 @@ CO2 footprint/
 2. Install dependencies: `pip install -r requirements.txt`
 3. Start app: `uvicorn webapp:app --reload`
 4. Open: `http://127.0.0.1:8000`
-5. Submit supplier data and review:
-   - risk score and class
-   - policy decision
-   - report text
-   - history and comparison view
-6. Click a history row to auto-fill form inputs from that audit.
-7. Use the **Info** button in history rows to:
-   - view complete audit metadata and report details
-   - open the single **Download Files** action for format selection
+5. Submit supplier data with new Gazette-compliant fields:
+   - **Sector:** Select industry (aluminium, refinery, petrochemicals, textiles, default)
+   - **Production Volume:** Optional for normalized intensity calculation
+   - **Production Unit:** tonne, MBBLS, or NRGF
+   - **Registry ID:** Optional entity registration number (e.g., REFOE001MP)
+6. Review audit results:
+   - Risk score with sector-specific classification
+   - Emissions intensity (tCO2eq per unit)
+   - Pro-rata progress towards 2027 target
+   - Registry validation status
+   - Multi-year trajectory (if multiple audits exist)
+   - Policy decision and blockchain verification
+7. Click a history row to auto-fill form inputs from that audit.
+8. Use the **Info** button in history rows to:
+   - View complete audit metadata and report details
+   - Open the single **Download Files** action for format selection
 
 ### Option B: CLI Script
 
@@ -226,6 +327,113 @@ CO2 footprint/
 
 ---
 
+## Blockchain Setup
+
+### Overview
+
+CfoE integrates with Algorand blockchain for immutable audit anchoring and verification. All audits are recorded on-chain with three transaction types:
+
+1. **Score Anchor** - Risk score + input data hash
+2. **Report Hash** - SHA-256 hash of report text with verification code
+3. **HITL Decision** - Human approval/rejection for critical risk audits
+
+### Quick Start (Testnet)
+
+**No blockchain setup required!** CfoE works out-of-the-box with Algorand Testnet.
+
+1. Get a free Algorand wallet at [MyAlgo Wallet](https://wallet.myalgo.com/) or [Pera Wallet](https://perawallet.app/)
+2. Fund your testnet wallet at [Algorand Testnet Dispenser](https://bank.testnet.algorand.network/)
+3. Add credentials to `.env`:
+
+```env
+# Blockchain Configuration (Optional)
+ALGORAND_ADDRESS=your_wallet_address_here
+ALGORAND_PRIVATE_KEY=your_private_key_here
+ALGOD_SERVER=https://testnet-api.algonode.cloud
+ALGOD_TOKEN=
+```
+
+4. Restart the app - blockchain features will activate automatically!
+
+### Local Development (AlgoKit)
+
+For local blockchain testing without testnet:
+
+```bash
+# Install AlgoKit CLI
+pip install algokit
+
+# Start local Algorand node
+algokit localnet start
+
+# Build smart contracts (if applicable)
+python -m smart_contracts build
+
+# Update .env for local node
+ALGOD_SERVER=http://localhost:4001
+ALGOD_TOKEN=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+
+# Stop localnet when done
+algokit localnet stop
+```
+
+### Blockchain Features
+
+#### 1. Score Anchoring
+Every audit creates an on-chain transaction with:
+- Supplier name
+- Risk score and classification
+- Input data hash (SHA-256)
+- Timestamp
+
+#### 2. Report Hash Registration
+Report text is hashed and recorded with:
+- Report SHA-256 hash
+- Verification code (first 8 chars of hash)
+- Link to score anchor transaction
+
+#### 3. HITL Decision Recording
+Critical risk audits requiring human approval record:
+- Approval/rejection decision
+- Approver name and timestamp
+- Link to score anchor transaction
+
+### Verification
+
+Verify audit integrity using blockchain:
+
+```bash
+# Verify input data hash
+python verify_input_hash.py
+
+# Verify report hash
+python verify_report_hash.py
+
+# Complete audit verification
+python verify_audit.py
+```
+
+See `HASH_VERIFICATION_GUIDE.md` for detailed instructions.
+
+### Blockchain Status Panel
+
+The web dashboard displays real-time blockchain status:
+- Connection status (Connected/Offline)
+- Network (Algorand Testnet)
+- Wallet address and balance
+- Transaction counts (score anchors, HITL decisions, report hashes)
+- On-chain vs local transaction ratio
+
+### Offline Mode
+
+If blockchain credentials are not configured, CfoE operates in **offline mode**:
+- All features work normally
+- Transactions stored locally with unique IDs
+- Can be synced to blockchain later
+- No functionality loss
+
+---
+
 ## Developer Instructions
 
 ### Setup
@@ -237,6 +445,48 @@ CO2 footprint/
 | Install deps       | `pip install -r requirements.txt` |
 | Run smoke test     | `python test_setup.py`            |
 | Run app            | `uvicorn webapp:app --reload`     |
+
+### Fresh Laptop: Commands After Venv + Requirements
+
+Use this sequence right after activating your virtual environment and installing dependencies.
+
+```bash
+# Optional: quick sanity check
+python test_setup.py
+
+# Run web dashboard
+uvicorn webapp:app --reload
+# Open http://127.0.0.1:8000
+```
+
+```bash
+# Optional: run CLI mode instead of web
+python main.py
+```
+
+```bash
+# Optional: blockchain/localnet flow
+algokit localnet start
+python -m smart_contracts build
+```
+
+```bash
+# Optional: stop localnet when done
+algokit localnet stop
+```
+
+Required `.env` values for full functionality:
+
+```env
+GROQ_API_KEY=your_groq_api_key_here
+TAVILY_API_KEY=your_tavily_api_key_here
+ALGORAND_ADDRESS=your_wallet_address
+ALGORAND_PRIVATE_KEY=your_private_key
+ALGOD_SERVER=https://testnet-api.algonode.cloud
+ALGOD_TOKEN=
+```
+
+If `algokit` is not recognized, install AlgoKit CLI first, then run localnet/build commands.
 
 ### Environment
 
@@ -252,10 +502,47 @@ TAVILY_API_KEY=your_tavily_api_key_here
 ### Dev Notes
 
 - Core deterministic logic lives in `agents/calculation_agent.py` and `agents/policy_agent.py`.
+- Sector-specific thresholds and pro-rata calculations in `agents/calculation_agent.py`.
+- Entity registry validation in `agents/registry_agent.py`.
+- Multi-year trajectory analysis in `agents/trajectory_agent.py`.
+- Blockchain integration in `blockchain_client.py`.
 - Groq configuration and client setup in `config/groq_config.py`.
 - Coordinator and report orchestration live in `orchestrators/root_coordinator.py`.
-- Frontend consumes REST endpoints exposed by `webapp.py`.and report orchestration live in `orchestrators/root_coordinator.py`.
 - Frontend consumes REST endpoints exposed by `webapp.py`.
+
+### Testing
+
+```bash
+# Test Gazette compliance features
+python test_phase1.py          # Sectors, Pro-Rata, Normalized Metrics
+python test_phase2_phase3.py   # Registry, Trajectory
+
+# Test blockchain integration
+python verify_audit.py
+
+# Submit sample test data (interactive)
+python submit_test_data.py
+
+# Run web dashboard
+uvicorn webapp:app --reload
+```
+
+### Sample Test Data
+
+Use the provided sample data files for testing:
+- **SAMPLE_TEST_DATA.md** - Comprehensive test scenarios with copy-paste data
+- **sample_test_data.json** - JSON format for automated testing
+- **submit_test_data.py** - Interactive script to submit test audits
+
+```bash
+# Quick interactive testing
+python submit_test_data.py
+# Choose from:
+#   1. Quick Test (3 scenarios)
+#   2. Full Test (10 scenarios)
+#   3. Trajectory Test (3 audits)
+#   4. Submit Single Scenario
+```
 
 ---
 
@@ -281,9 +568,19 @@ TAVILY_API_KEY=your_tavily_api_key_here
 | Monitor agent parity       | Web path currently emphasizes deterministic pipeline | Notebook has fuller ADK-style demonstrations                   |
 | No auth on local dashboard | Local-only security profile                          | Intended for development environments                          |
 | Browser-specific handling  | Download/Open behavior can differ by browser         | Dedicated backend routes separate download and inline PDF view |
+| Blockchain testnet delays  | Transactions may take 3-5 seconds                    | UI shows progress logs, offline mode available                 |
 
 ---
 
 ## Made With
 
 Made With 💗 by Team Bankrupts
+
+---
+
+## Additional Documentation
+
+- **Gazette Compliance:** `CRITICAL_GAPS_IMPLEMENTATION.md` - Complete implementation guide
+- **Quick Reference:** `QUICK_REFERENCE.md` - Fast lookup for all 5 features
+- **Summary:** `ALL_GAPS_COMPLETE_SUMMARY.md` - Executive summary
+- **Hash Verification:** `HASH_VERIFICATION_GUIDE.md` - Blockchain verification guide

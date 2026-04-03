@@ -106,6 +106,10 @@ function refreshInputsFromAudit(item) {
   emissionsInput.value = item.emissions ?? "";
   violationsInput.value = item.violations ?? "";
   notesInput.value = item.notes ?? "";
+  document.getElementById("sector").value = item.sector_key ?? "default";
+  document.getElementById("production_volume").value = item.production_volume ?? "";
+  document.getElementById("production_unit").value = item.production_unit ?? "tonne";
+  document.getElementById("registry_id").value = item.registry_id ?? "";
 }
 
 async function fetchMetrics() {
@@ -201,6 +205,14 @@ function renderLatest(item) {
     ? '<span class="badge critical">Rejected</span>'
     : '<span class="badge low">Completed</span>';
   
+  const sectorInfo = item.sector ? `<div><strong>Sector:</strong> ${item.sector}</div>` : '';
+  const intensityInfo = item.emissions_intensity ? `<div><strong>Emissions Intensity:</strong> ${item.emissions_intensity.toFixed(3)} tCO2eq/${item.production_unit || 'unit'}</div>` : '';
+  const prorataInfo = item.prorata_progress ? `<div><strong>Pro-rata Progress:</strong> ${(item.prorata_progress * 100).toFixed(1)}% towards ${item.target_year || 2027} target</div>` : '';
+  const registryInfo = item.registry_id ? `<div><strong>Registry ID:</strong> ${item.registry_id}</div>` : '';
+  
+  // Fetch trajectory data for this supplier
+  fetchTrajectory(item.supplier_name);
+  
   latestEl.innerHTML = `
     <div class="latest-block">
       <div class="badges">
@@ -210,11 +222,16 @@ function renderLatest(item) {
         ${statusBadge}
       </div>
       <div><strong>${item.supplier_name}</strong> | Emissions ${item.emissions} | Violations ${item.violations}</div>
+      ${sectorInfo}
+      ${intensityInfo}
+      ${prorataInfo}
+      ${registryInfo}
       <div><strong>Decision:</strong> ${item.policy_decision}</div>
       <div><strong>Reason:</strong> ${item.policy_reason}</div>
       <div><strong>Action:</strong> ${item.recommended_action}</div>
       ${item.approver_name ? `<div><strong>Approved by:</strong> ${item.approver_name} on ${fmtDate(item.approval_timestamp)}</div>` : ''}
       ${item.approval_notes ? `<div><strong>Approval Notes:</strong> ${item.approval_notes}</div>` : ''}
+      <div id="trajectory-info" style="margin-top: 1rem;"></div>
       <div class="report">${item.report_text || "No report generated."}</div>
     </div>
   `;
@@ -690,6 +707,91 @@ function renderCompare() {
   `;
 }
 
+async function fetchTrajectory(supplierName) {
+  try {
+    const res = await fetch(`/api/trajectory/${encodeURIComponent(supplierName)}/compliance`);
+    const data = await res.json();
+    renderTrajectory(data);
+  } catch (err) {
+    console.error('Failed to fetch trajectory:', err);
+  }
+}
+
+function renderTrajectory(data) {
+  const trajectoryEl = document.getElementById('trajectory-info');
+  if (!trajectoryEl) return;
+  
+  if (data.audit_count < 2) {
+    trajectoryEl.innerHTML = `
+      <div class="trajectory-panel">
+        <h4>📊 Multi-Year Trajectory</h4>
+        <p class="trajectory-message">${data.message || 'Insufficient historical data for trajectory analysis'}</p>
+      </div>
+    `;
+    return;
+  }
+  
+  const trendIcon = data.trend === 'improving' ? '📈' : data.trend === 'deteriorating' ? '📉' : '➡️';
+  const onTrackBadge = data.on_track === true 
+    ? '<span class="badge low">✅ On Track</span>'
+    : data.on_track === false
+    ? '<span class="badge critical">⚠️ Behind Schedule</span>'
+    : '<span class="badge moderate">⏳ Monitoring</span>';
+  
+  const auditHistory = data.audits.slice(0, 5).map(a => 
+    `<div class="trajectory-audit">
+      <span>${a.timestamp}</span>
+      <span>${classToBadge(a.classification)}</span>
+      <span>Score: ${a.risk_score}</span>
+    </div>`
+  ).join('');
+  
+  trajectoryEl.innerHTML = `
+    <div class="trajectory-panel">
+      <div class="trajectory-header">
+        <h4>${trendIcon} Multi-Year Compliance Trajectory</h4>
+        ${onTrackBadge}
+      </div>
+      <div class="trajectory-stats">
+        <div class="trajectory-stat">
+          <span class="stat-label">Total Audits:</span>
+          <span class="stat-value">${data.audit_count}</span>
+        </div>
+        <div class="trajectory-stat">
+          <span class="stat-label">Trend:</span>
+          <span class="stat-value">${data.trend_label}</span>
+        </div>
+        <div class="trajectory-stat">
+          <span class="stat-label">Latest Score:</span>
+          <span class="stat-value">${data.latest_score}</span>
+        </div>
+        <div class="trajectory-stat">
+          <span class="stat-label">Score Change:</span>
+          <span class="stat-value ${data.score_change < 0 ? 'positive' : 'negative'}">${data.score_change > 0 ? '+' : ''}${data.score_change}</span>
+        </div>
+        ${data.on_track !== null ? `
+          <div class="trajectory-stat">
+            <span class="stat-label">Years Remaining:</span>
+            <span class="stat-value">${data.years_remaining}</span>
+          </div>
+          <div class="trajectory-stat">
+            <span class="stat-label">Required Rate:</span>
+            <span class="stat-value">${data.required_rate.toFixed(3)}/year</span>
+          </div>
+          <div class="trajectory-stat">
+            <span class="stat-label">Current Rate:</span>
+            <span class="stat-value">${data.improvement_rate.toFixed(3)}/year</span>
+          </div>
+        ` : ''}
+      </div>
+      <div class="trajectory-history">
+        <h5>Recent Audit History</h5>
+        ${auditHistory}
+      </div>
+    </div>
+  `;
+}
+
 async function submitAudit(event) {
   event.preventDefault();
 
@@ -698,6 +800,12 @@ async function submitAudit(event) {
     emissions: Number(document.getElementById("emissions").value),
     violations: Number(document.getElementById("violations").value),
     notes: document.getElementById("notes").value.trim(),
+    sector: document.getElementById("sector").value,
+    production_volume: document.getElementById("production_volume").value ? Number(document.getElementById("production_volume").value) : null,
+    production_unit: document.getElementById("production_unit").value,
+    registry_id: document.getElementById("registry_id").value.trim(),
+    baseline_year: 2023,
+    target_year: 2027
   };
 
   setStatus("Running audit...");
@@ -738,6 +846,29 @@ async function clearHistory() {
   await fetchHistory();
   latestEl.textContent = "No audit executed yet.";
   setStatus("Audit history cleared.");
+}
+
+async function validateRegistryId() {
+  const registryId = document.getElementById("registry_id").value.trim();
+  const validationEl = document.getElementById("registry-validation");
+  
+  if (!registryId) {
+    validationEl.innerHTML = '';
+    return;
+  }
+  
+  try {
+    const res = await fetch(`/api/registry/validate/${encodeURIComponent(registryId)}`);
+    const data = await res.json();
+    
+    if (data.valid) {
+      validationEl.innerHTML = `<span class="validation-success">✓ Valid: ${data.entity.name} (${data.entity.sector})</span>`;
+    } else {
+      validationEl.innerHTML = `<span class="validation-error">✗ ${data.error}</span>`;
+    }
+  } catch (err) {
+    validationEl.innerHTML = `<span class="validation-error">✗ Validation failed</span>`;
+  }
 }
 
 document.getElementById("audit-form").addEventListener("submit", submitAudit);

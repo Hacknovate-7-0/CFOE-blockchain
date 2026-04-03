@@ -35,12 +35,39 @@
                             placeholder="NovaSteel Components" />
                     </label>
                     <label>
+                        Sector
+                        <select id="sector" required>
+                            <option value="default">General Industry</option>
+                            <option value="aluminium">Aluminium</option>
+                            <option value="refinery">Refinery</option>
+                            <option value="petrochemicals">Petrochemicals</option>
+                            <option value="textiles">Textiles</option>
+                        </select>
+                    </label>
+                    <label>
                         Annual CO2 Emissions (tons)
                         <input type="number" id="emissions" min="0" step="0.01" required placeholder="2100" />
                     </label>
                     <label>
                         Regulatory Violations
                         <input type="number" id="violations" min="0" max="500" required placeholder="2" />
+                    </label>
+                    <label>
+                        Production Volume (optional)
+                        <input type="number" id="production_volume" min="0" step="0.01" placeholder="1000" />
+                    </label>
+                    <label>
+                        Production Unit
+                        <select id="production_unit">
+                            <option value="tonne">Tonne</option>
+                            <option value="MBBLS">MBBLS (Thousand Barrels)</option>
+                            <option value="NRGF">NRGF</option>
+                        </select>
+                    </label>
+                    <label>
+                        Registry ID (optional)
+                        <input type="text" id="registry_id" maxlength="20" placeholder="REFOE001MP" onblur="validateRegistryId()" />
+                        <div id="registry-validation" class="registry-validation"></div>
                     </label>
                     <label>
                         Extra Notes
