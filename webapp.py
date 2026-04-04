@@ -15,7 +15,7 @@ from typing import Any
 from uuid import uuid4
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, BackgroundTasks
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -48,6 +48,20 @@ OUTPUT_CSV_PATH = OUTPUT_DIR / "audits_master.csv"
 
 lock = threading.Lock()
 log_queue = Queue()
+active_websockets: list[WebSocket] = []
+
+def broadcast_log_sync(log_msg: dict[str, Any]) -> None:
+    """Put log in queue and try to send to active websockets"""
+    log_queue.put(log_msg)
+    # Create async task to broadcast
+    for ws in active_websockets[:]:
+        try:
+            # Use asyncio to send if event loop is running
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.create_task(ws.send_json(log_msg))
+        except Exception:
+            pass
 
 
 class AuditRequest(BaseModel):
@@ -221,14 +235,14 @@ def build_fallback_report(req: AuditRequest, risk_data: dict[str, Any], policy_d
 
 
 def run_audit(req: AuditRequest) -> dict[str, Any]:
-    log_queue.put({"type": "info", "message": f"Starting audit for {req.supplier_name}..."})
+    broadcast_log_sync({"type": "info", "message": f"Starting audit for {req.supplier_name}..."})
     
     # Check if wallet is connected
     bc = get_blockchain_client()
     if not bc.wallet_connected:
-        log_queue.put({"type": "warning", "message": "⚠ Wallet not connected - transactions will be stored locally"})
+        broadcast_log_sync({"type": "warning", "message": "⚠ Wallet not connected - transactions will be stored locally"})
     
-    log_queue.put({"type": "info", "message": "[1/5] Calculating ESG risk scores..."})
+    broadcast_log_sync({"type": "info", "message": "[1/5] Calculating ESG risk scores..."})
     
     # Calculate audit date for pro-rata
     from datetime import datetime
@@ -242,14 +256,14 @@ def run_audit(req: AuditRequest) -> dict[str, Any]:
         audit_date=audit_date
     )
     
-    log_queue.put({"type": "success", "message": f"✓ Risk Score: {risk_data['risk_score']} ({risk_data['classification']}) - Sector: {risk_data['sector']}"})
+    broadcast_log_sync({"type": "success", "message": f"✓ Risk Score: {risk_data['risk_score']} ({risk_data['classification']}) - Sector: {risk_data['sector']}"})
     
     # Blockchain: Anchor score
     bc = get_blockchain_client()
     if bc.wallet_connected and bc.address:
-        log_queue.put({"type": "info", "message": f"[Blockchain] Using wallet: {bc.address[:16]}..."})
+        broadcast_log_sync({"type": "info", "message": f"[Blockchain] Using wallet: {bc.address[:16]}..."})
     else:
-        log_queue.put({"type": "info", "message": "[Blockchain] Wallet not connected - storing locally"})
+        broadcast_log_sync({"type": "info", "message": "[Blockchain] Wallet not connected - storing locally"})
     
     try:
         score_anchor = bc.anchor_score(
@@ -263,19 +277,19 @@ def run_audit(req: AuditRequest) -> dict[str, Any]:
             external_risk_score=risk_data.get("external_risk_score", 0.0)
         )
     except Exception as e:
-        log_queue.put({"type": "error", "message": f"✗ Score anchor exception: {str(e)}"})
+        broadcast_log_sync({"type": "error", "message": f"✗ Score anchor exception: {str(e)}"})
         score_anchor = None
     
     if score_anchor:
         tx_id = score_anchor.get('tx_id') or score_anchor.get('local_id', 'LOCAL')
-        log_queue.put({"type": "success", "message": f"✓ Score anchored on blockchain: {tx_id[:20]}..."})
+        broadcast_log_sync({"type": "success", "message": f"✓ Score anchored on blockchain: {tx_id[:20]}..."})
     else:
-        log_queue.put({"type": "error", "message": "✗ Score anchor failed - returned None"})
+        broadcast_log_sync({"type": "error", "message": "✗ Score anchor failed - returned None"})
         score_anchor = {"local_id": "FALLBACK", "on_chain": False}
     
-    log_queue.put({"type": "info", "message": "[2/5] Enforcing policy rules..."})
+    broadcast_log_sync({"type": "info", "message": "[2/5] Enforcing policy rules..."})
     policy_data = enforce_policy_hitl(risk_score=risk_data["risk_score"], supplier_name=req.supplier_name)
-    log_queue.put({"type": "success", "message": f"✓ Policy Decision: {policy_data['decision']}"})
+    broadcast_log_sync({"type": "success", "message": f"✓ Policy Decision: {policy_data['decision']}"})
 
     report_source = "deterministic-fallback"
     report_text = build_fallback_report(req, risk_data, policy_data)
@@ -284,7 +298,7 @@ def run_audit(req: AuditRequest) -> dict[str, Any]:
     client = get_client()
     if client is not None:
         try:
-            log_queue.put({"type": "info", "message": "[3/5] Generating AI report with multi-agent pipeline..."})
+            broadcast_log_sync({"type": "info", "message": "[3/5] Generating AI report with multi-agent pipeline..."})
             coordinator = create_root_coordinator(client)
             response = coordinator.generate_content(make_audit_prompt(req))
             report_text = response.text
@@ -294,15 +308,15 @@ def run_audit(req: AuditRequest) -> dict[str, Any]:
                 external_risk_score = coordinator.context.state.get('external_risk_score', 0.0)
             
             report_source = "groq-llama"
-            log_queue.put({"type": "success", "message": "✓ AI report generated successfully"})
+            broadcast_log_sync({"type": "success", "message": "✓ AI report generated successfully"})
         except Exception as e:
-            log_queue.put({"type": "warning", "message": f"⚠ AI report failed, using fallback: {str(e)[:100]}"})
+            broadcast_log_sync({"type": "warning", "message": f"⚠ AI report failed, using fallback: {str(e)[:100]}"})
             report_source = "deterministic-fallback"
     else:
-        log_queue.put({"type": "warning", "message": "⚠ AI client unavailable, using deterministic report"})
+        broadcast_log_sync({"type": "warning", "message": "⚠ AI client unavailable, using deterministic report"})
 
     # Blockchain: Register report hash
-    log_queue.put({"type": "info", "message": "[4/5] Recording report hash on blockchain..."})
+    broadcast_log_sync({"type": "info", "message": "[4/5] Recording report hash on blockchain..."})
     try:
         report_hash_record = bc.register_report_hash(
             supplier_name=req.supplier_name,
@@ -311,16 +325,16 @@ def run_audit(req: AuditRequest) -> dict[str, Any]:
             report_text=report_text
         )
     except Exception as e:
-        log_queue.put({"type": "error", "message": f"✗ Report hash exception: {str(e)}"})
+        broadcast_log_sync({"type": "error", "message": f"✗ Report hash exception: {str(e)}"})
         report_hash_record = None
     
     if report_hash_record:
-        log_queue.put({"type": "success", "message": f"✓ Report hash: {report_hash_record['verification_code']}"})
+        broadcast_log_sync({"type": "success", "message": f"✓ Report hash: {report_hash_record['verification_code']}"})
     else:
-        log_queue.put({"type": "error", "message": "✗ Report hash failed - returned None"})
+        broadcast_log_sync({"type": "error", "message": "✗ Report hash failed - returned None"})
         report_hash_record = {"local_id": "FALLBACK", "on_chain": False}
 
-    log_queue.put({"type": "info", "message": "[5/5] Finalizing audit results..."})
+    broadcast_log_sync({"type": "info", "message": "[5/5] Finalizing audit results..."})
     result = {
         "job_id": f"JOB-{uuid4().hex[:8].upper()}",
         "audit_id": f"AUD-{uuid4().hex[:10].upper()}",
@@ -363,7 +377,7 @@ def run_audit(req: AuditRequest) -> dict[str, Any]:
     
     # HITL Workflow Pause: If human approval required, save to pending queue
     if policy_data["human_approval_required"]:
-        log_queue.put({"type": "warning", "message": "🚨 CRITICAL RISK - Audit paused for human approval"})
+        broadcast_log_sync({"type": "warning", "message": "🚨 CRITICAL RISK - Audit paused for human approval"})
         result["status"] = "pending_approval"
         result["approval_status"] = "pending"
         result["approver_name"] = None
@@ -371,7 +385,7 @@ def run_audit(req: AuditRequest) -> dict[str, Any]:
         result["approval_timestamp"] = None
         result["blockchain"]["hitl_tx"] = None
     else:
-        log_queue.put({"type": "success", "message": f"✓ Audit complete for {req.supplier_name}"})
+        broadcast_log_sync({"type": "success", "message": f"✓ Audit complete for {req.supplier_name}"})
     
     return result
 
@@ -584,7 +598,7 @@ def serve_index() -> FileResponse:
 
 
 @app.post("/api/audit", response_model=AuditResponse)
-def create_audit(payload: AuditRequest) -> dict[str, Any]:
+async def create_audit(payload: AuditRequest) -> dict[str, Any]:
     # Phase 2: Validate registry ID if provided
     if payload.registry_id and payload.registry_id.strip():
         validation = validate_registry_id(payload.registry_id)
@@ -592,6 +606,10 @@ def create_audit(payload: AuditRequest) -> dict[str, Any]:
             raise HTTPException(status_code=400, detail=validation["error"])
     
     try:
+        # Clear log queue before starting
+        while not log_queue.empty():
+            log_queue.get()
+        
         result = run_audit(payload)
         result["download_links"] = export_audit_files(result)
     except Exception as exc:
@@ -910,9 +928,16 @@ def wallet_disconnect() -> dict[str, Any]:
     return {"status": "ok"}
 
 
+# Store active WebSocket connections
+active_websockets: list[WebSocket] = []
+
+# Store active WebSocket connections
+active_websockets: list[WebSocket] = []
+
 @app.websocket("/ws/logs")
 async def websocket_logs(websocket: WebSocket):
     await websocket.accept()
+    active_websockets.append(websocket)
     try:
         while True:
             # Check for new log messages
@@ -921,5 +946,9 @@ async def websocket_logs(websocket: WebSocket):
                 await websocket.send_json(log_msg)
             await asyncio.sleep(0.1)
     except WebSocketDisconnect:
-        pass
+        if websocket in active_websockets:
+            active_websockets.remove(websocket)
+    except Exception:
+        if websocket in active_websockets:
+            active_websockets.remove(websocket)
 

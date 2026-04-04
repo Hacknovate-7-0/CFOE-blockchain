@@ -15,6 +15,9 @@
     historyBody: document.getElementById('history-body'),
     metrics: document.getElementById('metrics'),
     blockchainStatus: document.getElementById('blockchain-status'),
+    dashboardShell: document.getElementById('dashboard-shell'),
+    chimneyVisual: document.getElementById('chimney-visual'),
+    historyViewMoreBtn: document.getElementById('history-view-more-btn'),
     riskFilter: document.getElementById('risk-filter'),
     searchInput: document.getElementById('search'),
     compareBox: document.getElementById('compare-box'),
@@ -49,6 +52,20 @@
     connectWalletBtn: document.getElementById('connect-wallet-btn'),
     disconnectWalletBtn: document.getElementById('disconnect-wallet-btn'),
     walletAddress: document.getElementById('wallet-address'),
+    walletDialog: document.getElementById('wallet-dialog'),
+    walletCloseBtn: document.getElementById('wallet-close-btn'),
+    walletModalStatus: document.getElementById('wallet-modal-status'),
+    walletModalAddress: document.getElementById('wallet-modal-address'),
+    walletModalBalance: document.getElementById('wallet-modal-balance'),
+    walletModalNetwork: document.getElementById('wallet-modal-network'),
+    walletModalConnection: document.getElementById('wallet-modal-connection'),
+    walletModalScoreAnchors: document.getElementById('wallet-modal-score-anchors'),
+    walletModalOnchainCount: document.getElementById('wallet-modal-onchain-count'),
+    walletModalHitlDecisions: document.getElementById('wallet-modal-hitl-decisions'),
+    walletModalReportHashes: document.getElementById('wallet-modal-report-hashes'),
+    walletCopyBtn: document.getElementById('wallet-copy-btn'),
+    walletConnectModalBtn: document.getElementById('wallet-connect-modal-btn'),
+    runBtn: document.getElementById('run-btn'),
   };
 
   // ============================================
@@ -61,6 +78,10 @@
     visibleAudits: [],
     logSocket: null,
     currentApprovalAuditId: null,
+    splitActivated: false,
+    showAllHistory: false,
+    walletStatus: { connected: false, address: null },
+    blockchainSnapshot: null,
   };
 
   const DOWNLOADABLE_FORMATS = ['pdf', 'docx'];
@@ -87,6 +108,45 @@
     return Number.isNaN(date.getTime()) ? isoString : date.toLocaleString();
   };
 
+  const normalizeRiskClass = (classification = '') => {
+    const text = classification.toLowerCase();
+    if (text.includes('critical')) return 'critical';
+    if (text.includes('high')) return 'high';
+    if (text.includes('moderate')) return 'moderate';
+    return 'low';
+  };
+
+  const truncateAddress = (address) => {
+    if (!address) return 'N/A';
+    if (address.length <= 12) return address;
+    return `${address.slice(0, 6)}...${address.slice(-4)}`;
+  };
+
+  const syncSplitLayoutFromSession = () => {
+    const persisted = sessionStorage.getItem('cfoe_split_layout') === '1';
+    if (!persisted) return;
+    state.splitActivated = true;
+    elements.dashboardShell.classList.add('split-active');
+    elements.runBtn.classList.remove('run-btn-hidden');
+    elements.runBtn.classList.add('run-btn-visible');
+  };
+
+  const activateSplitLayout = () => {
+    if (state.splitActivated) return;
+    state.splitActivated = true;
+    sessionStorage.setItem('cfoe_split_layout', '1');
+    elements.dashboardShell.classList.add('split-active');
+    setTimeout(() => {
+      elements.runBtn.classList.remove('run-btn-hidden');
+      elements.runBtn.classList.add('run-btn-visible');
+    }, 600);
+  };
+
+  const updateChimneyRisk = (classification = 'Low Risk') => {
+    if (!elements.chimneyVisual) return;
+    elements.chimneyVisual.dataset.risk = normalizeRiskClass(classification);
+  };
+
   // ============================================
   // WebSocket Connection
   // ============================================
@@ -111,6 +171,10 @@
   };
 
   const addLogMessage = (logMsg) => {
+    if (elements.logPanel && elements.logPanel.style.display === 'none') {
+      elements.logPanel.style.display = 'block';
+    }
+
     const logLine = document.createElement('div');
     logLine.className = `log-line log-${logMsg.type}`;
     logLine.textContent = logMsg.message;
@@ -156,6 +220,7 @@
     try {
       const response = await fetch('/api/blockchain/status');
       const data = await response.json();
+      state.blockchainSnapshot = data;
 
       const statusBadge = data.connected
         ? '<span class="badge low">Connected</span>'
@@ -165,7 +230,8 @@
         ? '<span class="badge low">Wallet Connected</span>'
         : '<span class="badge critical">Wallet Not Connected</span>';
 
-      elements.blockchainStatus.innerHTML = `
+      if (elements.blockchainStatus) {
+        elements.blockchainStatus.innerHTML = `
         <div class="blockchain-grid">
           <div class="blockchain-item">
             <span class="blockchain-label">Network:</span>
@@ -201,8 +267,39 @@
           </div>
         </div>
       `;
+      }
+
+      if (elements.walletModalBalance) {
+        elements.walletModalBalance.textContent = `${data.balance.toFixed(6)} ALGO`;
+      }
+      if (elements.walletModalNetwork) {
+        elements.walletModalNetwork.textContent = data.network;
+        elements.walletModalNetwork.className = data.connected
+          ? 'badge low'
+          : 'badge moderate';
+      }
+      if (elements.walletModalConnection) {
+        elements.walletModalConnection.textContent = data.connected ? 'Connected' : 'Offline';
+        elements.walletModalConnection.className = data.connected
+          ? 'badge low'
+          : 'badge moderate';
+      }
+      if (elements.walletModalScoreAnchors) {
+        elements.walletModalScoreAnchors.textContent = String(data.score_anchors ?? 0);
+      }
+      if (elements.walletModalOnchainCount) {
+        elements.walletModalOnchainCount.textContent = String(data.on_chain_count ?? 0);
+      }
+      if (elements.walletModalHitlDecisions) {
+        elements.walletModalHitlDecisions.textContent = String(data.hitl_decisions ?? 0);
+      }
+      if (elements.walletModalReportHashes) {
+        elements.walletModalReportHashes.textContent = String(data.report_hashes ?? 0);
+      }
     } catch (error) {
-      elements.blockchainStatus.innerHTML = '<p class="error">Failed to load blockchain status</p>';
+      if (elements.blockchainStatus) {
+        elements.blockchainStatus.innerHTML = '<p class="error">Failed to load blockchain status</p>';
+      }
     }
   };
 
@@ -268,6 +365,11 @@
     const registryInfo = item.registry_id ? `<div><strong>Registry ID:</strong> ${item.registry_id}</div>` : '';
 
     fetchTrajectory(item.supplier_name);
+    updateChimneyRisk(item.classification || 'Low Risk');
+
+    if (!elements.latestResult) {
+      return;
+    }
 
     elements.latestResult.innerHTML = `
       <div class="latest-block">
@@ -298,8 +400,9 @@
         ? '<span class="badge low">On-Chain</span>'
         : '<span class="badge moderate">Local</span>';
 
-      elements.blockchainInfo.style.display = 'block';
-      elements.blockchainInfo.innerHTML = `
+      if (elements.blockchainInfo) {
+        elements.blockchainInfo.style.display = 'block';
+        elements.blockchainInfo.innerHTML = `
         <h3>⛓️ Blockchain Verification</h3>
         <div class="blockchain-details">
           <div class="blockchain-row">
@@ -338,8 +441,11 @@
           ` : ''}
         </div>
       `;
+      }
     } else {
-      elements.blockchainInfo.style.display = 'none';
+      if (elements.blockchainInfo) {
+        elements.blockchainInfo.style.display = 'none';
+      }
     }
   };
 
@@ -354,8 +460,9 @@
     });
 
     state.visibleAudits = filteredAudits;
+    const displayedAudits = state.showAllHistory ? filteredAudits : filteredAudits.slice(0, 5);
 
-    elements.historyBody.innerHTML = filteredAudits
+    elements.historyBody.innerHTML = displayedAudits
       .map((item) => {
         const isChecked = state.selectedForCompare.includes(item.audit_id) ? 'checked' : '';
         return `
@@ -371,6 +478,14 @@
         `;
       })
       .join('');
+
+    if (filteredAudits.length > 5) {
+      elements.historyViewMoreBtn.style.display = 'inline-block';
+      elements.historyViewMoreBtn.textContent = state.showAllHistory ? 'Show less' : 'View more';
+    } else {
+      elements.historyViewMoreBtn.style.display = 'none';
+      state.showAllHistory = false;
+    }
 
     attachHistoryListeners();
   };
@@ -836,6 +951,7 @@ ${item.report_text || 'No report generated.'}</div>
 
     setStatus('Running audit...');
     showLogPanel();
+    addLogMessage({ type: 'info', message: 'Audit started. Waiting for progress updates...' });
 
     try {
       const response = await fetch('/api/audit', {
@@ -855,8 +971,6 @@ ${item.report_text || 'No report generated.'}</div>
       await fetchMetrics();
       await fetchBlockchainStatus();
       await fetchHistory();
-
-      setTimeout(hideLogPanel, 3000);
     } catch (error) {
       setStatus(error.message, true);
       addLogMessage({ type: 'error', message: `Error: ${error.message}` });
@@ -870,7 +984,9 @@ ${item.report_text || 'No report generated.'}</div>
     state.selectedForCompare = [];
     await fetchMetrics();
     await fetchHistory();
-    elements.latestResult.textContent = 'No audit executed yet.';
+    if (elements.latestResult) {
+      elements.latestResult.textContent = 'No audit executed yet.';
+    }
     setStatus('Audit history cleared.');
   };
 
@@ -904,16 +1020,31 @@ ${item.report_text || 'No report generated.'}</div>
     try {
       const response = await fetch('/api/wallet/status');
       const data = await response.json();
+      state.walletStatus = data;
 
       if (data.connected && data.address) {
-        const shortAddr = `${data.address.slice(0, 6)}...${data.address.slice(-4)}`;
-        elements.walletAddress.innerHTML = `<span class="wallet-connected">🟢 ${shortAddr}</span>`;
-        elements.connectWalletBtn.style.display = 'none';
-        elements.disconnectWalletBtn.style.display = 'inline-block';
+        const shortAddr = truncateAddress(data.address);
+        elements.walletAddress.innerHTML = `<span class="wallet-connected">● ${shortAddr}</span>`;
+        if (elements.walletModalStatus) {
+          elements.walletModalStatus.innerHTML = '<span class="wallet-connected">Connected</span>';
+        }
+        if (elements.walletModalAddress) {
+          elements.walletModalAddress.textContent = shortAddr;
+        }
+        if (elements.disconnectWalletBtn) {
+          elements.disconnectWalletBtn.style.display = 'inline-block';
+        }
       } else {
-        elements.walletAddress.textContent = 'Not connected';
-        elements.connectWalletBtn.style.display = 'inline-block';
-        elements.disconnectWalletBtn.style.display = 'none';
+        elements.walletAddress.textContent = 'Connect Defly Wallet';
+        if (elements.walletModalStatus) {
+          elements.walletModalStatus.textContent = 'Disconnected';
+        }
+        if (elements.walletModalAddress) {
+          elements.walletModalAddress.textContent = 'N/A';
+        }
+        if (elements.disconnectWalletBtn) {
+          elements.disconnectWalletBtn.style.display = 'none';
+        }
       }
     } catch (error) {
       console.error('Failed to fetch wallet status:', error);
@@ -983,8 +1114,19 @@ ${item.report_text || 'No report generated.'}</div>
   // ============================================
   const attachEventListeners = () => {
     elements.auditForm.addEventListener('submit', submitAudit);
+    elements.auditForm.querySelectorAll('input, textarea, select').forEach((field) => {
+      field.addEventListener('focus', activateSplitLayout, { once: false });
+      field.addEventListener('click', activateSplitLayout, { once: false });
+    });
     elements.riskFilter.addEventListener('change', renderHistory);
-    elements.searchInput.addEventListener('input', renderHistory);
+    elements.searchInput.addEventListener('input', () => {
+      state.showAllHistory = false;
+      renderHistory();
+    });
+    elements.historyViewMoreBtn.addEventListener('click', () => {
+      state.showAllHistory = !state.showAllHistory;
+      renderHistory();
+    });
     elements.downloadAuditSelect.addEventListener('change', refreshDownloadFormatOptions);
     elements.downloadOpenBtn.addEventListener('click', openSelectedDownload);
     elements.downloadCancelBtn.addEventListener('click', () => elements.downloadDialog.close());
@@ -996,7 +1138,32 @@ ${item.report_text || 'No report generated.'}</div>
     elements.clearBtn.addEventListener('click', clearHistory);
 
     if (elements.connectWalletBtn) {
-      elements.connectWalletBtn.addEventListener('click', connectDeflyWallet);
+      elements.connectWalletBtn.addEventListener('click', () => elements.walletDialog.showModal());
+    }
+    if (elements.walletConnectModalBtn) {
+      elements.walletConnectModalBtn.addEventListener('click', connectDeflyWallet);
+    }
+    if (elements.walletCloseBtn) {
+      elements.walletCloseBtn.addEventListener('click', () => elements.walletDialog.close());
+    }
+    if (elements.walletDialog) {
+      elements.walletDialog.addEventListener('click', (event) => {
+        if (event.target === elements.walletDialog) {
+          elements.walletDialog.close();
+        }
+      });
+    }
+    if (elements.walletCopyBtn) {
+      elements.walletCopyBtn.addEventListener('click', async () => {
+        const address = state.walletStatus.address;
+        if (!address) return;
+        try {
+          await navigator.clipboard.writeText(address);
+          setStatus('Wallet address copied.');
+        } catch {
+          setStatus('Failed to copy wallet address.', true);
+        }
+      });
     }
     if (elements.disconnectWalletBtn) {
       elements.disconnectWalletBtn.addEventListener('click', disconnectWallet);
@@ -1007,6 +1174,8 @@ ${item.report_text || 'No report generated.'}</div>
   // Initialization
   // ============================================
   const initialize = async () => {
+    syncSplitLayoutFromSession();
+    updateChimneyRisk('Low Risk');
     let retries = 0;
     while (!window.walletManager && retries < 50) {
       await new Promise((resolve) => setTimeout(resolve, 100));

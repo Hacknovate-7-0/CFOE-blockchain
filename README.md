@@ -511,7 +511,7 @@ python test_setup.py
 uvicorn webapp:app --reload --port 8001
 
 # Run Simulator on port 8000 (in a separate terminal)
-uvicorn webapp:app --reload --port 8000
+ uvicorn simulator.simulator:app --reload --port 8000
 ```
 
 ```bash

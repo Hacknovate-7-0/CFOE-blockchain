@@ -48,6 +48,7 @@ MAX_HISTORY   = 60
 MAX_EXPECTED_DAILY_CO2 = sum(p["base_co2"] for p in PROCESSES) * 2.1  # theoretical max with spike
 
 CFOE_AUDIT_URL = "http://localhost:8001/api/audit"
+CFOE_HISTORY_URL = "http://localhost:8001/api/audits"
 
 # ── Application ───────────────────────────────────────────────────────
 
@@ -347,6 +348,18 @@ async def run_audit() -> dict[str, Any]:
     }
     await manager.broadcast(broadcast_payload)
     return audit_result
+
+
+@app.get("/audit/history")
+async def get_audit_history() -> dict[str, Any]:
+    """Fetch audit history from CfoE main system."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(CFOE_HISTORY_URL)
+            resp.raise_for_status()
+            return resp.json()
+    except Exception as exc:
+        return {"error": str(exc), "items": [], "count": 0}
 
 
 # ── Dashboard serving ─────────────────────────────────────────────────
